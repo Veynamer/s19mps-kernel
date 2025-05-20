@@ -64,7 +64,7 @@ static int sprd_panel_unprepare(struct drm_panel *p)
 	struct gpio_timing *timing;
 	int items, i;
 
-	DRM_INFO("%s()\n", __func__);
+	DRM_DEBUG("%s()\n", __func__);
 
 	if (panel->info.reset_gpio) {
 		items = panel->info.rst_off_seq.items;
@@ -105,7 +105,7 @@ static int sprd_panel_prepare(struct drm_panel *p)
 	struct gpio_timing *timing;
 	int items, i, ret;
 
-	DRM_INFO("%s()\n", __func__);
+	DRM_DEBUG("%s()\n", __func__);
 
 	ret = regulator_enable(panel->supply);
 	if (ret < 0)
@@ -147,7 +147,7 @@ void  sprd_panel_enter_doze(struct drm_panel *p)
 {
 	struct sprd_panel *panel = to_sprd_panel(p);
 
-	DRM_INFO("%s() enter\n", __func__);
+	DRM_DEBUG("%s() enter\n", __func__);
 
 	mutex_lock(&panel->lock);
 
@@ -167,7 +167,7 @@ void  sprd_panel_exit_doze(struct drm_panel *p)
 {
 	struct sprd_panel *panel = to_sprd_panel(p);
 
-	DRM_INFO("%s() enter\n", __func__);
+	DRM_DEBUG("%s() enter\n", __func__);
 
 	mutex_lock(&panel->lock);
 
@@ -188,7 +188,7 @@ static int sprd_panel_disable(struct drm_panel *p)
 {
 	struct sprd_panel *panel = to_sprd_panel(p);
 
-	DRM_INFO("%s()\n", __func__);
+	DRM_DEBUG("%s()\n", __func__);
 
 	mutex_lock(&panel->lock);
 	/*
@@ -224,7 +224,7 @@ static int sprd_panel_enable(struct drm_panel *p)
 {
 	struct sprd_panel *panel = to_sprd_panel(p);
 
-	DRM_INFO("%s()\n", __func__);
+	DRM_DEBUG("%s()\n", __func__);
 
 	mutex_lock(&panel->lock);
 	sprd_panel_send_cmds(panel->slave,
@@ -259,7 +259,7 @@ static int sprd_panel_get_modes(struct drm_panel *p)
 	u32 sr_width = 0, sr_height = 0;
 	int i, mode_count = 0;
 
-	DRM_INFO("%s()\n", __func__);
+	DRM_DEBUG("%s()\n", __func__);
 	mode = drm_mode_duplicate(p->drm, &panel->info.mode);
 	if (!mode) {
 		DRM_ERROR("failed to alloc mode %s\n", panel->info.mode.name);
@@ -625,7 +625,7 @@ static int of_parse_buildin_modes(struct panel_info *info,
 		info->buildin_modes[i].vrefresh = drm_mode_vrefresh(&info->buildin_modes[i]);
 	}
 	info->num_buildin_modes = num_timings;
-	DRM_INFO("info->num_buildin_modes = %d\n", num_timings);
+	DRM_DEBUG("info->num_buildin_modes = %d\n", num_timings);
 	goto done;
 
 entryfail:
@@ -687,7 +687,7 @@ static int sprd_oled_set_brightness(struct backlight_device *bdev)
 
 	brightness = bdev->props.brightness;
 
-	DRM_INFO("%s brightness: %d\n", __func__, brightness);
+	DRM_DEBUG("%s brightness: %d\n", __func__, brightness);
 
 	sprd_panel_send_cmds(panel->slave,
 			     panel->info.cmds[CMD_OLED_REG_LOCK],
@@ -791,7 +791,7 @@ static int sprd_oled_backlight_init(struct sprd_panel *panel)
 			panel->info.cmds[CMD_OLED_BRIGHTNESS],
 			panel->info.cmds_len[CMD_OLED_BRIGHTNESS]);
 
-	DRM_INFO("%s() ok\n", __func__);
+	DRM_DEBUG("%s() ok\n", __func__);
 
 	return 0;
 }
@@ -1152,7 +1152,7 @@ static int sprd_panel_remove(struct mipi_dsi_device *slave)
 	struct sprd_panel *panel = mipi_dsi_get_drvdata(slave);
 	int ret;
 
-	DRM_INFO("%s()\n", __func__);
+	DRM_DEBUG("%s()\n", __func__);
 
 	sprd_panel_disable(&panel->base);
 	sprd_panel_unprepare(&panel->base);

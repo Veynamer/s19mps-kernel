@@ -46,7 +46,7 @@ static int wcn_resume(struct device *dev)
 	int ret;
 	struct sipc_chn_info *sipc_chn;
 
-	WCN_INFO("%s enter\n", __func__);
+	WCN_DBG("%s enter\n", __func__);
 	for (chn = 0; chn < SIPC_CHN_NUM; chn++) {
 		sipc_chn = wcn_sipc_channel_get(chn);
 		if ((sipc_chn != NULL) && (sipc_chn->ops != NULL) &&
@@ -67,7 +67,7 @@ static int wcn_suspend(struct device *dev)
 	int ret;
 	struct sipc_chn_info *sipc_chn;
 
-	WCN_INFO("%s enter\n", __func__);
+	WCN_DBG("%s enter\n", __func__);
 	for (chn = 0; chn < SIPC_CHN_NUM; chn++) {
 		sipc_chn = wcn_sipc_channel_get(chn);
 		if ((sipc_chn != NULL) && (sipc_chn->ops != NULL) &&

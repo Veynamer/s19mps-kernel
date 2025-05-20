@@ -1,0 +1,27 @@
+&usb {
+  revo,otg-gpio = <&ap_gpio 88 0>;
+};
+
+&charger_manager {
+	cm-chargers = "sgm41511_charger";
+	extcon = <&pmic_typec>;
+};
+
+&aon_i2c0 {
+	status = "okay";
+	clock-frequency = <400000>;
+	
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	sgm41511_chg: charger@6b {
+		compatible = "sgm41511_chg";
+		reg = <0x6b>;
+		phys = <&hsphy>;
+		monitored-battery = <&bat>;
+		extcon = <&extcon_gpio>;
+		vddvbus:otg-vbus {
+			regulator-name = "vddvbus";
+		};
+	};
+};

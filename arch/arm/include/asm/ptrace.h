@@ -164,6 +164,7 @@ static inline unsigned long user_stack_pointer(struct pt_regs *regs)
 		((current_stack_pointer | (THREAD_SIZE - 1)) - 7) - 1;	\
 })
 
+extern void get_pt_regs(struct pt_regs *);
 
 /*
  * Update ITSTATE after normal execution of an IT block instruction.

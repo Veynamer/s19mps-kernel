@@ -1,0 +1,87 @@
+/ {
+	fragment {
+		target-path = "/";
+		__overlay__ {
+			lcds {
+				lcd_er88577a_mipi: lcd_er88577a_mipi {
+
+				    sprd,dsi-work-mode = <1>;
+				    sprd,dsi-lane-number = <4>;
+				    sprd,dsi-color-format = "rgb888";
+
+				    sprd,phy-bit-clock = <552000>;
+				    sprd,phy-escape-clock = <20000>; /* kHz */
+
+				    sprd,width-mm = <108>;
+				    sprd,height-mm = <172>;
+
+				    sprd,esd-check-enable = <0>;
+				    sprd,esd-check-mode = <3>;
+				    sprd,esd-check-period = <2000>;
+				    /* sprd,esd-check-regs = <0xA>; */
+				    /* sprd,esd-return-code = <0x9c>; */
+
+
+				    sprd,reset-on-sequence = <1 10>, <0 10>, <1 30>;
+				    sprd,reset-off-sequence = <0 10>;
+
+				    sprd,initial-command = [
+	            29 01 00 03 E0 AB BA
+	            29 01 00 03 E1 BA AB
+	            29 01 00 05 B1 10 01 47 FF
+	            29 01 00 07 B2 0C 14 04 50 50 14
+	            29 01 00 04 B3 56 53 00
+	            29 01 00 04 B4 2A 30 04
+	            29 01 00 08 B6 B0 00 00 10 00 10 00
+	            29 01 00 08 B8 06 12 29 49 48 00 00
+	            29 01 00 27 B9 7C 4D 3B 2E 2C 1E 24 10 2C 2D 30 51 41 4A 3E 3B 31 1D 06 7C 4D 3B 2E 2C 1E 24 10 2C 2D 30 51 41 4A 3E 3B 31 1D 06
+	            29 01 00 11 C0 76 98 F2 34 55 44 54 44 40 04 40 04 07 00 00 00
+	            29 01 00 0B C1 54 94 02 86 80 04 7A 04 54 00
+	            29 01 00 0D C2 37 09 08 89 08 11 22 33 44 82 18 00
+	            29 01 00 17 C3 8F 4F 0D 0D 13 13 11 11 05 02 02 02 02 02 02 00 00 1C 1D 08 02 02
+	            29 01 00 17 C4 0E 0E 0C 0C 12 12 10 10 04 02 02 02 02 02 02 00 00 1C 1D 08 02 02
+	            29 01 00 03 C6 4D 4D
+	            29 01 00 07 C8 22 00 31 42 34 16
+	            29 01 00 06 C9 A1 22 FF C4 23
+	            29 01 00 03 CA CB 43
+	            29 01 00 09 CD 0E 64 64 2F 1E 6B 06 B3
+	            29 01 00 05 D2 E3 2B 38 00
+	            29 01 00 0C D4 00 01 00 0E 04 44 08 10 00 00 00
+	            29 01 00 09 E6 80 01 FF FF FF FF FF FF
+	            29 01 00 06 F0 12 03 20 00 FF
+	            29 01 00 02 F3 00
+	            13 78 00 01 11
+	            13 14 00 01 29
+				    ];
+
+				    sprd,sleep-in-command = [
+				        13 0A 00 01 28
+				        13 78 00 01 10
+				    ];
+
+				    sprd,sleep-out-command = [
+				        13 78 00 01 11
+				        13 64 00 01 29
+				    ];
+
+				    display-timings {
+					native-mode = <&er88577a_timing0>;
+					er88577a_timing0: timing0 {
+					        clock-frequency = <76800000>;
+					        hactive = <800>;
+					        vactive = <1280>;
+					        hfront-porch = <80>;
+					        hback-porch = <80>;
+					        hsync-len = <10>;
+					        vfront-porch = <20>;
+					        vback-porch = <20>;
+					        vsync-len = <4>;
+						};
+					};
+				};
+			};
+		};
+	};
+};
+
+

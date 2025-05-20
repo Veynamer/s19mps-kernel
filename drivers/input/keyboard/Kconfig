@@ -244,6 +244,13 @@ config KEYBOARD_GPIO
 	  To compile this driver as a module, choose M here: the
 	  module will be called gpio_keys.
 
+config KEYBOARD_GPIO_REVO
+	default m
+	tristate "GPIO Buttons"
+	depends on GPIOLIB || COMPILE_TEST
+	help
+	 Copyed from KEYBOARD_GPIO code. Fix some bug, and avoid gki test.  
+
 config KEYBOARD_GPIO_POLLED
 	tristate "Polled GPIO buttons"
 	depends on GPIOLIB

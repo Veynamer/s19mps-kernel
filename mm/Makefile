@@ -29,6 +29,8 @@ mmu-$(CONFIG_MMU)	:= highmem.o memory.o mincore.o \
 			   mlock.o mmap.o mmu_gather.o mprotect.o mremap.o \
 			   msync.o page_vma_mapped.o pagewalk.o \
 			   pgtable-generic.o rmap.o vmalloc.o
+GCOV_PROFILE_vmalloc.o := $(CONFIG_SPRD_MEM_GCOV)
+GCOV_PROFILE_rmap.o := $(CONFIG_SPRD_MEM_GCOV)
 
 
 ifdef CONFIG_CROSS_MEMORY_ATTACH
@@ -42,7 +44,10 @@ obj-y			:= filemap.o mempool.o oom_kill.o fadvise.o \
 			   mm_init.o mmu_context.o percpu.o slab_common.o \
 			   compaction.o vmacache.o \
 			   interval_tree.o list_lru.o workingset.o \
-			   debug.o gup.o $(mmu-y)
+			   debug.o gup.o $(mmu-y) vmpressure.o
+GCOV_PROFILE_compaction.o := $(CONFIG_SPRD_MEM_GCOV)
+GCOV_PROFILE_vmpressure.o := $(CONFIG_SPRD_MEM_GCOV)
+GCOV_PROFILE_swap.o := $(CONFIG_SPRD_MEM_GCOV)
 
 # Give 'page_alloc' its own module-parameter namespace
 page-alloc-y := page_alloc.o
@@ -51,6 +56,7 @@ page-alloc-$(CONFIG_SHUFFLE_PAGE_ALLOCATOR) += shuffle.o
 obj-y += page-alloc.o
 obj-y += init-mm.o
 obj-y += memblock.o
+GCOV_PROFILE_memblock.o := $(CONFIG_SPRD_MEM_GCOV)
 
 ifdef CONFIG_MMU
 	obj-$(CONFIG_ADVISE_SYSCALLS)	+= madvise.o
@@ -69,15 +75,18 @@ obj-$(CONFIG_MMU_NOTIFIER) += mmu_notifier.o
 obj-$(CONFIG_KSM) += ksm.o
 obj-$(CONFIG_PAGE_POISONING) += page_poison.o
 obj-$(CONFIG_SLAB) += slab.o
+GCOV_PROFILE_slab.o := $(CONFIG_SPRD_MEM_GCOV)
 obj-$(CONFIG_SLUB) += slub.o
+GCOV_PROFILE_slub.o := $(CONFIG_SPRD_MEM_GCOV)
 obj-$(CONFIG_KASAN)	+= kasan/
+obj-$(CONFIG_KFENCE) += kfence/
 obj-$(CONFIG_FAILSLAB) += failslab.o
 obj-$(CONFIG_MEMORY_HOTPLUG) += memory_hotplug.o
 obj-$(CONFIG_MEMTEST)		+= memtest.o
 obj-$(CONFIG_MIGRATION) += migrate.o
 obj-$(CONFIG_TRANSPARENT_HUGEPAGE) += huge_memory.o khugepaged.o
 obj-$(CONFIG_PAGE_COUNTER) += page_counter.o
-obj-$(CONFIG_MEMCG) += memcontrol.o vmpressure.o
+obj-$(CONFIG_MEMCG) += memcontrol.o
 obj-$(CONFIG_MEMCG_SWAP) += swap_cgroup.o
 obj-$(CONFIG_CGROUP_HUGETLB) += hugetlb_cgroup.o
 obj-$(CONFIG_GUP_BENCHMARK) += gup_benchmark.o
@@ -106,4 +115,8 @@ obj-$(CONFIG_HARDENED_USERCOPY) += usercopy.o
 obj-$(CONFIG_PERCPU_STATS) += percpu-stats.o
 obj-$(CONFIG_ZONE_DEVICE) += memremap.o
 obj-$(CONFIG_HMM_MIRROR) += hmm.o
+obj-$(CONFIG_E_SHOW_MEM) += emem.o
+GCOV_PROFILE_emem.o := $(CONFIG_SPRD_MEM_GCOV)
 obj-$(CONFIG_MEMFD_CREATE) += memfd.o
+obj-$(CONFIG_PROCESS_RECLAIM)	+= process_reclaim.o
+GCOV_PROFILE_process_reclaim.o := $(CONFIG_SPRD_MEM_GCOV)

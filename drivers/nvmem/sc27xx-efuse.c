@@ -4,13 +4,22 @@
 #include <linux/hwspinlock.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/nvmem-provider.h>
 
 /* PMIC global registers definition */
 #define SC27XX_MODULE_EN		0xc08
+#define SC2730_MODULE_EN		0x1808
+#define UMP9620_MODULE_EN		0x2008
+#define UMP9620_EFUSE_RTC		0x2010
+#define UMP9621_MODULE_EN		0x2008
+#define UMP9621_EFUSE_RTC		0x2010
+#define UMP96XX_CLK_GATE		BIT(3)
 #define SC27XX_EFUSE_EN			BIT(6)
+#define UMP518_MODULE_EN		0x1808
+#define UMP518_EFUSE_RTC		0x1810
 
 /* Efuse controller registers definition */
 #define SC27XX_EFUSE_GLB_CTRL		0x0
@@ -22,6 +31,13 @@
 #define SC27XX_EFUSE_WR_TIMING_CTRL	0x20
 #define SC27XX_EFUSE_RD_TIMING_CTRL	0x24
 #define SC27XX_EFUSE_EFUSE_DEB_CTRL	0x28
+#define SC27XX_EFUSE_BLOCK_REG   	0x40
+
+/* Bits definitions for UMP9620_EFUSE_RTC register */
+#define UMP96XX_EFUSE_RTC_EN		BIT(11)
+
+/* Bits definitions for UMP518_EFUSE_RTC register */
+#define UMP518_EFUSE_RTC_EN		BIT(11)
 
 /* Mask definition for SC27XX_EFUSE_BLOCK_INDEX register */
 #define SC27XX_EFUSE_BLOCK_MASK		GENMASK(4, 0)
@@ -39,8 +55,12 @@
 #define SC27XX_EFUSE_RD_DONE		BIT(4)
 
 /* Block number and block width (bytes) definitions */
+#define UMP9620_EFUSE_BLOCK_MAX		64
+#define UMP9621_EFUSE_BLOCK_MAX		12
+#define UMP518_EFUSE_BLOCK_MAX		64
 #define SC27XX_EFUSE_BLOCK_MAX		32
 #define SC27XX_EFUSE_BLOCK_WIDTH	2
+#define SC27XX_EFUSE_BLOCK_SIZE	(SC27XX_EFUSE_BLOCK_WIDTH * BITS_PER_BYTE)
 
 /* Timeout (ms) for the trylock of hardware spinlocks */
 #define SC27XX_EFUSE_HWLOCK_TIMEOUT	5000
@@ -49,12 +69,47 @@
 #define SC27XX_EFUSE_POLL_TIMEOUT	3000000
 #define SC27XX_EFUSE_POLL_DELAY_US	10000
 
+/*
+ * Since different PMICs of SC27xx series can have different
+ * address , we should save address in the device data structure.
+ */
+struct sc27xx_efuse_variant_data {
+	u32 module_en;
+	u32 block_max;
+};
+
 struct sc27xx_efuse {
 	struct device *dev;
 	struct regmap *regmap;
 	struct hwspinlock *hwlock;
 	struct mutex mutex;
 	u32 base;
+	const struct sc27xx_efuse_variant_data *var_data;
+};
+
+static const struct sc27xx_efuse_variant_data sc2731_edata = {
+	.module_en = SC27XX_MODULE_EN,
+	.block_max = SC27XX_EFUSE_BLOCK_MAX,
+};
+
+static const struct sc27xx_efuse_variant_data sc2730_edata = {
+	.module_en = SC2730_MODULE_EN,
+	.block_max = SC27XX_EFUSE_BLOCK_MAX,
+};
+
+static const struct sc27xx_efuse_variant_data ump9620_edata = {
+	.module_en = UMP9620_MODULE_EN,
+	.block_max = UMP9620_EFUSE_BLOCK_MAX,
+};
+
+static const struct sc27xx_efuse_variant_data ump9621_edata = {
+	.module_en = UMP9621_MODULE_EN,
+	.block_max = UMP9621_EFUSE_BLOCK_MAX,
+};
+
+static const struct sc27xx_efuse_variant_data ump518_edata = {
+	.module_en = UMP518_MODULE_EN,
+	.block_max = UMP518_EFUSE_BLOCK_MAX,
 };
 
 /*
@@ -103,15 +158,15 @@ static int sc27xx_efuse_poll_status(struct sc27xx_efuse *efuse, u32 bits)
 	return 0;
 }
 
-static int sc27xx_efuse_read(void *context, u32 offset, void *val, size_t bytes)
+static int ump962x_efuse_read(void *context, u32 offset, void *val, size_t bytes)
 {
 	struct sc27xx_efuse *efuse = context;
 	u32 buf, blk_index = offset / SC27XX_EFUSE_BLOCK_WIDTH;
 	u32 blk_offset = (offset % SC27XX_EFUSE_BLOCK_WIDTH) * BITS_PER_BYTE;
 	int ret;
 
-	if (blk_index > SC27XX_EFUSE_BLOCK_MAX ||
-	    bytes > SC27XX_EFUSE_BLOCK_WIDTH)
+	if (blk_index >= (efuse->var_data->block_max) ||
+			bytes > SC27XX_EFUSE_BLOCK_WIDTH)
 		return -EINVAL;
 
 	ret = sc27xx_efuse_lock(efuse);
@@ -119,7 +174,75 @@ static int sc27xx_efuse_read(void *context, u32 offset, void *val, size_t bytes)
 		return ret;
 
 	/* Enable the efuse controller. */
-	ret = regmap_update_bits(efuse->regmap, SC27XX_MODULE_EN,
+	ret = regmap_update_bits(efuse->regmap, efuse->var_data->module_en,
+				 SC27XX_EFUSE_EN, SC27XX_EFUSE_EN);
+	if (ret)
+		goto unlock_efuse;
+
+	if (of_device_is_compatible(efuse->dev->of_node,
+					"sprd,ump518-efuse")) {
+		ret = regmap_update_bits(efuse->regmap, UMP518_EFUSE_RTC,
+			UMP518_EFUSE_RTC_EN, UMP518_EFUSE_RTC_EN);
+	} else if (of_device_is_compatible(efuse->dev->of_node,
+					"sprd,ump9620-efuse")) {
+		ret = regmap_update_bits(efuse->regmap, UMP9620_EFUSE_RTC,
+			UMP96XX_EFUSE_RTC_EN, UMP96XX_EFUSE_RTC_EN);
+	} else {
+		ret = regmap_update_bits(efuse->regmap, UMP9621_EFUSE_RTC,
+			UMP96XX_EFUSE_RTC_EN, UMP96XX_EFUSE_RTC_EN);
+	}
+
+	if (ret)
+		goto unlock_efuse;
+
+	ret = regmap_update_bits(efuse->regmap, efuse->base,
+				 UMP96XX_CLK_GATE, 0);
+	if (ret)
+		goto unlock_efuse;
+
+	/* Clear the read done flag. */
+	ret = regmap_update_bits(efuse->regmap,
+				 efuse->base + SC27XX_EFUSE_MODE_CTRL,
+				 SC27XX_EFUSE_CLR_RDDONE,
+				 SC27XX_EFUSE_CLR_RDDONE);
+
+	/* Read data from efuse memory. */
+	ret = regmap_read(efuse->regmap, (efuse->base + SC27XX_EFUSE_BLOCK_REG) + (0x4 * blk_index),
+		  &buf);
+	if (ret)
+		goto disable_efuse;
+
+disable_efuse:
+	/* Disable the efuse controller after reading. */
+	regmap_update_bits(efuse->regmap, efuse->var_data->module_en, SC27XX_EFUSE_EN, 0);
+unlock_efuse:
+	sc27xx_efuse_unlock(efuse);
+
+	if (!ret) {
+		buf >>= blk_offset;
+		memcpy(val, &buf, bytes);
+	}
+
+	return ret;
+}
+
+static int sc27xx_efuse_read(void *context, u32 offset, void *val, size_t bytes)
+{
+	struct sc27xx_efuse *efuse = context;
+	u32 buf, blk_index = offset / SC27XX_EFUSE_BLOCK_WIDTH;
+	u32 blk_offset = (offset % SC27XX_EFUSE_BLOCK_WIDTH) * BITS_PER_BYTE;
+	int ret;
+
+	if (blk_index > (efuse->var_data->block_max) ||
+			bytes > SC27XX_EFUSE_BLOCK_WIDTH)
+		return -EINVAL;
+
+	ret = sc27xx_efuse_lock(efuse);
+	if (ret)
+		return ret;
+
+	/* Enable the efuse controller. */
+	ret = regmap_update_bits(efuse->regmap, efuse->var_data->module_en,
 				 SC27XX_EFUSE_EN, SC27XX_EFUSE_EN);
 	if (ret)
 		goto unlock_efuse;
@@ -169,7 +292,7 @@ static int sc27xx_efuse_read(void *context, u32 offset, void *val, size_t bytes)
 
 disable_efuse:
 	/* Disable the efuse controller after reading. */
-	regmap_update_bits(efuse->regmap, SC27XX_MODULE_EN, SC27XX_EFUSE_EN, 0);
+	regmap_update_bits(efuse->regmap, efuse->var_data->module_en, SC27XX_EFUSE_EN, 0);
 unlock_efuse:
 	sc27xx_efuse_unlock(efuse);
 
@@ -187,7 +310,14 @@ static int sc27xx_efuse_probe(struct platform_device *pdev)
 	struct nvmem_config econfig = { };
 	struct nvmem_device *nvmem;
 	struct sc27xx_efuse *efuse;
+	const struct sc27xx_efuse_variant_data *pdata;
 	int ret;
+
+	pdata = of_device_get_match_data(&pdev->dev);
+	if (!pdata) {
+		dev_err(&pdev->dev, "No matching driver data found\n");
+		return -EINVAL;
+	}
 
 	efuse = devm_kzalloc(&pdev->dev, sizeof(*efuse), GFP_KERNEL);
 	if (!efuse)
@@ -219,14 +349,30 @@ static int sc27xx_efuse_probe(struct platform_device *pdev)
 
 	mutex_init(&efuse->mutex);
 	efuse->dev = &pdev->dev;
+	efuse->var_data = pdata;
 	platform_set_drvdata(pdev, efuse);
 
 	econfig.stride = 1;
 	econfig.word_size = 1;
 	econfig.read_only = true;
 	econfig.name = "sc27xx-efuse";
-	econfig.size = SC27XX_EFUSE_BLOCK_MAX * SC27XX_EFUSE_BLOCK_WIDTH;
-	econfig.reg_read = sc27xx_efuse_read;
+	econfig.size = (efuse->var_data->block_max) * SC27XX_EFUSE_BLOCK_WIDTH;
+	if ((of_device_is_compatible(efuse->dev->of_node,
+					"sprd,ump9620-efuse")) ||
+		(of_device_is_compatible(efuse->dev->of_node,
+					"sprd,ump9621-efuse"))) {
+		econfig.id = of_alias_get_id(np, "pmic_efuse");
+		if (econfig.id < 0) {
+			dev_err(&pdev->dev, "failed to get pmic_efuse device id, econfig.id:%d\n", econfig.id);
+			return -EINVAL;
+		}
+		econfig.reg_read = ump962x_efuse_read;
+	} else if (of_device_is_compatible(efuse->dev->of_node,
+					"sprd,ump518-efuse")) {
+		econfig.reg_read = ump962x_efuse_read;
+	} else {
+		econfig.reg_read = sc27xx_efuse_read;
+	}
 	econfig.priv = efuse;
 	econfig.dev = &pdev->dev;
 	nvmem = devm_nvmem_register(&pdev->dev, &econfig);
@@ -248,7 +394,12 @@ static int sc27xx_efuse_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id sc27xx_efuse_of_match[] = {
-	{ .compatible = "sprd,sc2731-efuse" },
+	{ .compatible = "sprd,sc2731-efuse", .data = &sc2731_edata},
+	{ .compatible = "sprd,sc2730-efuse", .data = &sc2730_edata},
+	{ .compatible = "sprd,sc2721-efuse", .data = &sc2731_edata},
+	{ .compatible = "sprd,ump9620-efuse", .data = &ump9620_edata},
+	{ .compatible = "sprd,ump9621-efuse", .data = &ump9621_edata},
+	{ .compatible = "sprd,ump518-efuse", .data = &ump518_edata},
 	{ }
 };
 

@@ -9,6 +9,23 @@ config DEFCONFIG_LIST
 	default ARCH_DEFCONFIG
 	default "arch/$(ARCH)/defconfig"
 
+config CC_VERSION_TEXT
+	string
+	default "$(CC_VERSION_TEXT)"
+	help
+	  This is used in unclear ways:
+
+	  - Re-run Kconfig when the compiler is updated
+	    The 'default' property references the environment variable,
+	    CC_VERSION_TEXT so it is recorded in include/config/auto.conf.cmd.
+	    When the compiler is updated, Kconfig will be invoked.
+
+	  - Ensure full rebuild when the compier is updated
+	    include/linux/kconfig.h contains this option in the comment line so
+	    fixdep adds include/config/cc/version/text.h into the auto-generated
+	    dependency. When the compiler is updated, syncconfig will touch it
+	    and then every file will be rebuilt.
+
 config CC_IS_GCC
 	def_bool $(success,$(CC) --version | head -n 1 | grep -q gcc)
 
@@ -26,6 +43,10 @@ config LD_IS_LLD
 config CLANG_VERSION
 	int
 	default $(shell,$(srctree)/scripts/clang-version.sh $(CC))
+
+config LLD_VERSION
+	int
+	default $(shell,$(srctree)/scripts/lld-version.sh $(LD))
 
 config CC_CAN_LINK
 	def_bool $(success,$(srctree)/scripts/cc-can-link.sh $(CC))
@@ -692,6 +713,41 @@ config HAVE_UNSTABLE_SCHED_CLOCK
 config GENERIC_SCHED_CLOCK
 	bool
 
+menu "FAIR Scheuler tunables"
+
+choice
+	prompt "Utilization's PELT half-Life"
+	default PELT_UTIL_HALFLIFE_32
+	help
+	  Allows choosing one of the possible values for the PELT half-life to
+	  be used for the update of the utilization of tasks and CPUs.
+	  The half-life is the amount of [ms] required by the PELT signal to
+	  build up to 50% utilization. The higher the half-life the longer it
+	  takes for a task to be represented as a big one.
+
+	  If not sure, use the default of 32 ms.
+
+config PELT_UTIL_HALFLIFE_32
+	bool "32 ms, default for server"
+
+config PELT_UTIL_HALFLIFE_16
+	bool "16 ms, suggested for interactive workloads"
+	help
+	  Use 16ms as PELT half-life value. This will increase the ramp-up and
+	  decay of utlization and load twice as fast as for the default
+	  configuration using 32ms.
+
+config PELT_UTIL_HALFLIFE_8
+	bool "8 ms, very fast"
+	help
+	  Use 8ms as PELT half-life value. This will increase the ramp-up and
+	  decay of utlization and load four time as fast as for the default
+	  configuration using 32ms.
+
+endchoice
+
+endmenu # FAIR Scheduler tunables"
+
 menu "Scheduler features"
 
 config UCLAMP_TASK
@@ -819,6 +875,13 @@ config MEMCG
 	select EVENTFD
 	help
 	  Provides control over the memory footprint of tasks in a cgroup.
+
+config MEMCGV2_DECAYED_WATERMARK
+        bool "Memcgv2: introduce decayed memory.low"
+        depends on MEMCG
+        default n
+        help
+          Introduce percentage protection.
 
 config MEMCG_SWAP
 	bool "Swap controller"
@@ -1137,6 +1200,37 @@ config SCHED_AUTOGROUP
 	  desktop applications.  Task group autogeneration is currently based
 	  upon task session.
 
+config SPRD_CORE_CTL
+        bool "Sprd cpu core"
+        depends on SMP
+        default n
+        help
+        This option enables cpu isolation, which implement an interface to
+        userspace to isolate cpu dynamically, the isolated cpu will be
+        unavailable to scheduler and load balancer, and all its non-pinned
+        timers, IRQs and tasks will be migrated to other cpus, only pinned
+        kthread and IRQS are still allowed to run, this achieve similar
+        effect as hotplug but at lower latency cost.
+
+config SPRD_CORE_ISOLATION
+        bool "Sprd core control for isolation"
+        depends on SPRD_CORE_CTL
+        help
+        This option enables the core control functionality in
+        the scheduler. Core control automatically isolate and
+        unisolate cores based on cpu load and utilization. In
+        IPA, isolation cpu can also reduce cpu temperature.
+
+config SPRD_ROTATION_TASK
+	bool "Sprd rotation task"
+	depends on SMP
+	default n
+	help
+	  This option enables task rotation feature. In ARM big.little cpu
+	  topology, benchmark app may start NR_CPUS big tasks to run,
+	  rotation task can improve system performance between big core
+	  and little core.
+
 config SYSFS_DEPRECATED
 	bool "Enable deprecated sysfs features to support old userspace tools"
 	depends on SYSFS
@@ -1207,6 +1301,18 @@ if BLK_DEV_INITRD
 source "usr/Kconfig"
 
 endif
+
+config BOOT_CONFIG
+	bool "Boot config support"
+	select BLK_DEV_INITRD
+	help
+	  Extra boot config allows system admin to pass a config file as
+	  complemental extension of kernel cmdline when booting.
+	  The boot config file must be attached at the end of initramfs
+	  with checksum, size and magic word.
+	  See <file:Documentation/admin-guide/bootconfig.rst> for details.
+
+	  If unsure, say Y.
 
 choice
 	prompt "Compiler optimization level"
@@ -1538,6 +1644,11 @@ config ADVISE_SYSCALLS
 	  usage, improving performance. If building an embedded system where no
 	  applications use these syscalls, you can disable this option to save
 	  space.
+
+config HAVE_ARCH_USERFAULTFD_MINOR
+	bool
+	help
+	  Arch has userfaultfd minor fault support
 
 config MEMBARRIER
 	bool "Enable membarrier() system call" if EXPERT
@@ -2201,7 +2312,7 @@ endif # MODULES
 
 config MODULES_TREE_LOOKUP
 	def_bool y
-	depends on PERF_EVENTS || TRACING
+	depends on PERF_EVENTS || TRACING || CFI_CLANG
 
 config INIT_ALL_POSSIBLE
 	bool
@@ -2243,3 +2354,5 @@ config ARCH_HAS_SYNC_CORE_BEFORE_USERMODE
 # <asm/syscall_wrapper.h>.
 config ARCH_HAS_SYSCALL_WRAPPER
 	def_bool n
+
+source "init/Kconfig.gki"

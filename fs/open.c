@@ -743,9 +743,8 @@ static int do_dentry_open(struct file *f,
 	path_get(&f->f_path);
 	f->f_inode = inode;
 	f->f_mapping = inode->i_mapping;
-
-	/* Ensure that we skip any errors that predate opening of the file */
 	f->f_wb_err = filemap_sample_wb_err(f->f_mapping);
+	f->f_sb_err = file_sample_sb_err(f);
 
 	if (unlikely(f->f_flags & O_PATH)) {
 		f->f_mode = FMODE_PATH | FMODE_OPENED;
@@ -1065,6 +1064,26 @@ struct file *filp_open(const char *filename, int flags, umode_t mode)
 }
 EXPORT_SYMBOL(filp_open);
 
+/* ANDROID: Allow drivers to open only block files from kernel mode */
+struct file *filp_open_block(const char *filename, int flags, umode_t mode)
+{
+	struct file *file;
+
+	file = filp_open(filename, flags, mode);
+	if (IS_ERR(file))
+		goto err_out;
+
+	/* Drivers should only be allowed to open block devices */
+	if (!S_ISBLK(file->f_mapping->host->i_mode)) {
+		filp_close(file, NULL);
+		file = ERR_PTR(-ENOTBLK);
+	}
+
+err_out:
+	return file;
+}
+EXPORT_SYMBOL_GPL(filp_open_block);
+
 struct file *file_open_root(struct dentry *dentry, struct vfsmount *mnt,
 			    const char *filename, int flags, umode_t mode)
 {
@@ -1076,11 +1095,36 @@ struct file *file_open_root(struct dentry *dentry, struct vfsmount *mnt,
 }
 EXPORT_SYMBOL(file_open_root);
 
+#if defined(CONFIG_SPRD_DEBUG)
+void _trace_vfs(struct file *filp, char *op, u64 time)
+{
+	char *buf;
+	char *fname;
+
+	buf = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!buf)
+		return;
+	fname = d_path(&filp->f_path, buf, PAGE_SIZE);
+
+	if (IS_ERR(fname))
+		goto out;
+
+	pr_info("[%-16s]%-16s vfs %5s %5lldms %s\n", current->comm,
+		current->group_leader ? current->group_leader->comm : "",
+		op, ktime_to_ms(time), fname);
+out:
+	kfree(buf);
+}
+#endif
+
 long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 {
 	struct open_flags op;
 	int fd = build_open_flags(flags, mode, &op);
 	struct filename *tmp;
+#if defined(CONFIG_SPRD_DEBUG)
+	u64 time = ktime_get_boot_fast_ns();
+#endif
 
 	if (fd)
 		return fd;
@@ -1098,6 +1142,11 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 		} else {
 			fsnotify_open(f);
 			fd_install(fd, f);
+#if defined(CONFIG_SPRD_DEBUG)
+			time = ktime_get_boot_fast_ns() - time;
+			if (time > vfs_open_max_ms * NSEC_PER_MSEC)
+				_trace_vfs(f, "open", time);
+#endif
 		}
 	}
 	putname(tmp);

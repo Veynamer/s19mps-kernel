@@ -1,0 +1,96 @@
+/ {
+	fragment {
+		target-path = "/";
+		__overlay__ {
+			lcds {
+			lcd_icnl9916_mipi: lcd_icnl9916_mipi {
+
+			sprd,dsi-work-mode = <1>;
+			sprd,dsi-lane-number = <4>;
+			sprd,dsi-color-format = "rgb888";
+
+					sprd,phy-bit-clock = <691000>;
+
+			sprd,width-mm = <68>;
+			sprd,height-mm = <151>;
+
+			sprd,esd-check-enable = <0>;
+			sprd,esd-check-mode = <1>;
+			sprd,esd-check-period = <1000>;
+			sprd,esd-check-register = <0x0A>;
+			sprd,esd-check-value = <0x9C>;
+
+					sprd,reset-on-sequence = <1 10>, <0 10>, <1 120>;
+					sprd,reset-off-sequence = <0 20>;
+
+			sprd,initial-command = [
+
+39 00 00 04 F0 99 16 0C
+39 00 00 21 C1 00 20 20 B4 04 30 30 04 40 06 22 70 33 31 07 11 84 4C 00 93 13 63 00 00 00 00 00 00 00 00 00 00
+23 00 00 02 C2 00
+39 00 00 09 C3 06 00 FF 00 FF 4D 10 01
+39 00 00 0D C4 04 33 B8 40 00 BC 00 00 00 00 00 F0
+39 00 00 18 C5 03 21 96 C8 3E 00 04 01 14 04 0E 18 C6 03 64 FF 01 04 18 22 45 14 38
+39 00 00 0D C6 72 24 13 2B 2B 28 3F 02 16 16 00 01
+39 00 00 21 CA 34 50 04 19 46 94 41 8F 44 44 36 50 54 54 39 5A 5A 5A 33 00 01 01 0E 3F D2 00 05 00 00 5A 5A 00
+39 00 00 19 B2 05 04 10 10 44 44 82 88 44 86 84 86 84 86 84 86 84 86 84 86 84 00 00 00
+39 00 00 10 B3 F4 01 01 11 91 86 00 00 84 00 00 65 4A 65 4A
+39 00 00 1D B4 19 0B 06 0B 06 26 26 88 A2 88 44 3B 26 00 55 3C 02 08 20 30 00 12 20 40 11 10 20 00
+39 00 00 1F B5 00 00 08 04 2E 2F 0C 0E 10 12 14 16 18 1A 28 02 02 02 02 02 02 02 FF FF FC 0C 00 00 3C 00
+39 00 00 1F B6 00 00 09 05 2E 2F 0D 0F 11 13 15 17 19 1B 29 02 02 02 02 02 02 02 FF FF FC 0C 00 00 3C 00
+39 00 00 15 C0 40 93 FF FF FF 3F FF 00 FF 00 CC B1 23 45 67 89 AD FF FF F0
+39 00 00 17 B7 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A 0A
+39 00 00 14 BC 00 00 00 00 04 00 FF F0 0B 33 5C 5B 43 33 00 5A 5A 55 55
+39 00 00 05 BD A1 0A 52 A6
+39 00 00 0A BF 0C 19 0C 19 00 11 04 18 50
+39 00 00 1C C7 77 77 77 77 77 77 77 77 70 77 77 77 77 77 77 77 77 70 31 00 01 FF FF 00 8A 8A 40
+39 00 00 21 80 FF FA F3 EC E6 E0 DB D7 D3 C5 BA B0 A8 A1 9A 8F 85 7B 73 72 6A 61 58 4E 42 32 28 1B 17 13 0F 0A
+39 00 00 21 81 FF FA F3 EC E6 E0 DB D7 D3 C5 BA B0 A8 A1 9A 8F 85 7B 73 72 6A 61 58 4E 42 32 28 1B 17 13 0F 0A
+39 00 00 21 82 FF FA F3 EC E6 E0 DB D7 D3 C5 BA B0 A8 A1 9A 8F 85 7B 73 72 6A 61 58 4E 42 32 28 1B 17 13 0F 0A
+39 00 00 1A 83 01 06 02 00 00 06 02 00 00 06 02 00 00 0A 06 02 00 0A 06 02 00 0A 06 02 00
+39 00 00 1C 84 30 3D 13 98 32 69 01 A7 64 30 3D 13 98 32 69 01 A7 64 30 3D 13 98 32 69 01 A7 64
+39 00 00 04 89 FE FE 00
+
+23 00 00 02 35 00
+23 78 00 02 11 00
+
+23 0A 00 02 29 00
+
+39 00 00 05 BD A1 0A 52 AE
+23 00 00 02 6D 02
+39 00 00 04 F0 00 00 00
+
+	
+		
+					];
+
+					sprd,sleep-in-command = [
+						
+						13 0A 00 01 28
+				13 78 00 01 10
+			];
+			sprd,sleep-out-command = [
+				13 64 00 01 11
+				13 14 00 01 29 
+			];
+
+			display-timings {
+				native-mode = <&icnl9916_timing0>;
+				icnl9916_timing0: timing0 {
+					clock-frequency = <96000000>;
+					hactive = <720>;
+					vactive = <1600>;
+					hfront-porch = <70>;
+					hback-porch = <80>;
+					hsync-len = <4>;
+					vfront-porch = <180>;
+					vback-porch = <32>;
+					vsync-len = <4>;
+				};
+			};
+		};
+		};
+		};
+	};
+};
+

@@ -18,7 +18,6 @@
  *  IRQ's are in fact implemented a bit like signal handlers for the kernel.
  *  Naturally it's not a 1:1 relation, but there are similarities.
  */
-#include <linux/kernel_stat.h>
 #include <linux/signal.h>
 #include <linux/ioport.h>
 #include <linux/interrupt.h>
@@ -27,7 +26,9 @@
 #include <linux/random.h>
 #include <linux/smp.h>
 #include <linux/init.h>
+#include <linux/seq_buf.h>
 #include <linux/seq_file.h>
+#include <linux/soc/sprd/sprd_sysdump.h>
 #include <linux/errno.h>
 #include <linux/list.h>
 #include <linux/kallsyms.h>
@@ -52,7 +53,14 @@ int arch_show_interrupts(struct seq_file *p, int prec)
 #ifdef CONFIG_SMP
 	show_ipi_list(p, prec);
 #endif
-	seq_printf(p, "%*s: %10lu\n", prec, "Err", irq_err_count);
+#ifdef CONFIG_SPRD_SYSDUMP
+	if (!p) {
+		if (sprd_irqstat_seq_buf)
+			seq_buf_printf(sprd_irqstat_seq_buf, "%*s: %10lu\n",
+					prec, "Err", irq_err_count);
+	} else
+#endif
+		seq_printf(p, "%*s: %10lu\n", prec, "Err", irq_err_count);
 	return 0;
 }
 

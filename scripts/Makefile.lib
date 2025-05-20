@@ -117,6 +117,16 @@ _c_flags += $(if $(patsubst n%,, \
 endif
 
 #
+# Enable clang's PGO profiling flags for a file or directory depending on
+# variables PGO_PROFILE_obj.o and PGO_PROFILE.
+#
+ifeq ($(CONFIG_PGO_CLANG),y)
+_c_flags += $(if $(patsubst n%,, \
+		$(PGO_PROFILE_$(basetarget).o)$(PGO_PROFILE)y), \
+		$(CFLAGS_PGO_CLANG))
+endif
+
+#
 # Enable address sanitizer flags for kernel except some files or directories
 # we don't want to check (depends on variables KASAN_SANITIZE_obj.o, KASAN_SANITIZE)
 #
@@ -178,6 +188,10 @@ DTC_INCLUDE    := $(srctree)/scripts/dtc/include-prefixes
 dtc_cpp_flags  = -Wp,-MD,$(depfile).pre.tmp -nostdinc                    \
 		 $(addprefix -I,$(DTC_INCLUDE))                          \
 		 -undef -D__DTS__
+
+ifeq ($(shell test -f include/generated/autoconf.h && echo yes),yes)
+	dtc_cpp_flags += -include include/generated/autoconf.h
+endif
 
 # Useful for describing the dependency of composite objects
 # Usage:
@@ -245,7 +259,13 @@ DTC_FLAGS += -Wno-unit_address_vs_reg \
 	-Wno-graph_child_address \
 	-Wno-simple_bus_reg \
 	-Wno-unique_unit_address \
-	-Wno-pci_device_reg
+	-Wno-pci_device_reg \
+	-Ereg_format \
+	-Eavoid_default_addr_size \
+	-Espi_bus_bridge \
+	-Ei2c_bus_reg \
+	-Epci_device_bus_num \
+	-Espi_bus_reg
 endif
 
 ifneq ($(findstring 2,$(KBUILD_EXTRA_WARN)),)
@@ -334,7 +354,8 @@ quiet_cmd_lzo = LZO     $@
       cmd_lzo = { cat $(real-prereqs) | $(KLZOP) -9; $(size_append); } > $@
 
 quiet_cmd_lz4 = LZ4     $@
-      cmd_lz4 = { cat $(real-prereqs) | $(LZ4) -l -c1 stdin stdout; \
+      cmd_lz4 = { cat $(real-prereqs) | \
+                  lz4 -l -12 --favor-decSpeed stdin stdout; \
                   $(size_append); } > $@
 
 # U-Boot mkimage

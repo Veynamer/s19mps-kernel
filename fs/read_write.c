@@ -25,6 +25,11 @@
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
 
+#if defined(CONFIG_SPRD_DEBUG)
+static int buf_tmp[524288/sizeof(int)];
+static int buf_last[524288/sizeof(int)];
+static int buf_cur[524288/sizeof(int)];
+#endif
 const struct file_operations generic_ro_fops = {
 	.llseek		= generic_file_llseek,
 	.read_iter	= generic_file_read_iter,
@@ -542,6 +547,9 @@ EXPORT_SYMBOL(kernel_write);
 ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
 {
 	ssize_t ret;
+#if defined(CONFIG_SPRD_DEBUG)
+	u64 time = ktime_get_boot_fast_ns();
+#endif
 
 	if (!(file->f_mode & FMODE_WRITE))
 		return -EBADF;
@@ -564,6 +572,11 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 		file_end_write(file);
 	}
 
+#if defined(CONFIG_SPRD_DEBUG)
+	time = ktime_get_boot_fast_ns() - time;
+	if (time > vfs_write_max_ms * NSEC_PER_MSEC)
+		_trace_vfs(file, "write", time);
+#endif
 	return ret;
 }
 
@@ -585,6 +598,32 @@ ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
 			ppos = &pos;
 		}
 		ret = vfs_read(f.file, buf, count, ppos);
+#if defined(CONFIG_SPRD_DEBUG)
+		if (ret >= 0 && !strcmp(f.file->f_path.dentry->d_name.name, "SequenceRead_test_file") && count == 524288) {
+			if (!__copy_from_user(buf_tmp, buf, 524288)) {
+				int i;
+				for (i = 0; i < 524288/sizeof(int); i += 4096/sizeof(int)) {
+					if ((*(buf_tmp+i+1) - *(buf_tmp+i) != 0x1) && (*(buf_tmp+i+2) - *(buf_tmp+i+1) != 0x1)) {
+						ppos = file_ppos(f.file);
+						if (ppos) {
+							pos = *ppos;
+							ppos = &pos;
+							printk("FS_DEBUG: current pos is 0x%llx\n", pos);
+							if (__copy_from_user(buf_last, buf, 524288))
+								printk("FS_DEBUG: buf_last: __copy_from_user failed\n");
+						}
+						ret = vfs_read(f.file, buf, count, ppos);
+						if (__copy_from_user(buf_cur, buf, 524288))
+							printk("FS_DEBUG: buf_cur: __copy_from_user failed\n");
+						if (__copy_to_user(buf, buf_last, 524288))
+							printk("FS_DEBUG: __copy_to_user failed\n");
+					}
+				}
+			} else {
+				printk("FS_DEBUG: buf_tmp: __copy_from_user failed\n");
+			}
+		}
+#endif
 		if (ret >= 0 && ppos)
 			f.file->f_pos = pos;
 		fdput_pos(f);

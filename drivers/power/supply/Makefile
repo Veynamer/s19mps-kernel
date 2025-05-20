@@ -67,7 +67,8 @@ obj-$(CONFIG_CHARGER_TWL4030)	+= twl4030_charger.o
 obj-$(CONFIG_CHARGER_LP8727)	+= lp8727_charger.o
 obj-$(CONFIG_CHARGER_LP8788)	+= lp8788-charger.o
 obj-$(CONFIG_CHARGER_GPIO)	+= gpio-charger.o
-obj-$(CONFIG_CHARGER_MANAGER)	+= charger-manager.o
+obj-$(CONFIG_CHARGER_MANAGER)	+= sprd-charger-manager.o
+sprd-charger-manager-objs := charger-manager.o sprd_vote.o sprd_vchg_detect.o sprd_fchg_extcon.o
 obj-$(CONFIG_CHARGER_LT3651)	+= lt3651-charger.o
 obj-$(CONFIG_CHARGER_MAX14577)	+= max14577_charger.o
 obj-$(CONFIG_CHARGER_DETECTOR_MAX14656)	+= max14656_charger_detector.o
@@ -81,14 +82,67 @@ obj-$(CONFIG_CHARGER_BQ24190)	+= bq24190_charger.o
 obj-$(CONFIG_CHARGER_BQ24257)	+= bq24257_charger.o
 obj-$(CONFIG_CHARGER_BQ24735)	+= bq24735-charger.o
 obj-$(CONFIG_CHARGER_BQ25890)	+= bq25890_charger.o
+obj-$(CONFIG_CHARGER_BQ25910)	+= bq25910_charger.o
 obj-$(CONFIG_CHARGER_SMB347)	+= smb347-charger.o
 obj-$(CONFIG_CHARGER_TPS65090)	+= tps65090-charger.o
 obj-$(CONFIG_CHARGER_TPS65217)	+= tps65217_charger.o
 obj-$(CONFIG_AXP288_FUEL_GAUGE) += axp288_fuel_gauge.o
 obj-$(CONFIG_AXP288_CHARGER)	+= axp288_charger.o
 obj-$(CONFIG_CHARGER_CROS_USBPD)	+= cros_usbpd-charger.o
-obj-$(CONFIG_CHARGER_SC2731)	+= sc2731_charger.o
-obj-$(CONFIG_FUEL_GAUGE_SC27XX)	+= sc27xx_fuel_gauge.o
+obj-$(CONFIG_CHARGER_AW32257)	+= aw32257_charger.o
+# obj-$(CONFIG_CHARGER_SC2720)	+= sc2720_charger.o
+# obj-$(CONFIG_CHARGER_SC2721)	+= sc2721_charger.o
+# obj-$(CONFIG_CHARGER_SC2731)	+= sc2731_charger.o
+obj-$(CONFIG_FUEL_GAUGE_SC27XX)	+= sc27xx_fuel_gauge.o sprd_battery_info.o
+# obj-$(CONFIG_CHARGER_FAN54015)	+= fan54015-charger.o
 obj-$(CONFIG_CHARGER_UCS1002)	+= ucs1002_power.o
 obj-$(CONFIG_CHARGER_BD70528)	+= bd70528-charger.o
 obj-$(CONFIG_CHARGER_WILCO)	+= wilco-charger.o
+obj-$(CONFIG_CHARGER_BQ2560X)	+= bq2560x-charger.o
+obj-$(CONFIG_CHARGER_BQ2597X)	+= bq2597x-charger.o
+obj-$(CONFIG_CHARGER_SC8551)	+= sc8551-charger.o
+obj-$(CONFIG_CHARGER_SGM41511)	+= sgm41511-charger.o
+obj-$(CONFIG_CHARGER_UPM6710)	+= upm6710-charger.o
+obj-$(CONFIG_FAST_CHARGER_SC27XX) += sc27xx_fast_charger.o
+obj-$(CONFIG_WIRELESS_CHARGE_PUMPS_CONVERTER_HL1506)	+= hl1506_charger.o
+obj-$(CONFIG_WIRELESS_CHARGER_NU1619)	+= nu1619_wireless_charger.o
+obj-$(CONFIG_WIRELESS_CHARGER_SY65153)	+= sy65153_wireless_charger.o
+obj-$(CONFIG_CHARGER_ETA6937)	+= eta6937-charger.o
+
+ifeq ($(BOARD_CHARGER_IC), fan54015)
+obj-m   += fan54015-charger.o
+endif
+ifeq ($(BOARD_CHARGER_IC), aw32207)
+obj-m   += aw32207-charger.o
+endif
+ifeq ($(BOARD_CHARGER_IC), sc2720)
+obj-m   += sc2720_charger.o
+endif
+ifeq ($(BOARD_CHARGER_IC), sc2721)
+obj-m   += sc2721_charger.o
+endif
+ifeq ($(BOARD_CHARGER_IC), sc2731)
+obj-m   += sc2731_charger.o
+endif
+ifeq ($(BOARD_CHARGER_IC), sgm41510)
+obj-m   += sgm41510-charger.o
+endif
+ifeq ($(BOARD_CHARGER_IC), single_sgm41510)
+obj-m   += sgm41510-charger.o
+endif
+
+ifeq ($(BOARD_CHARGER_IC), sgm41511)
+obj-m += fast-sgm41511-charger.o fast-sgm41511-slave-charger.o
+endif
+
+ifeq ($(BOARD_CHARGER_IC), single_sgm41511)
+obj-m += fast-sgm41511-charger.o
+endif
+
+ifeq ($(BOARD_CHARGER_IC), psc2965)
+obj-m += psc2965-charger.o psc2965-slave-charger.o
+endif
+
+ifeq ($(BOARD_CHARGER_IC), single_psc2965)
+obj-m += psc2965-charger.o
+endif 

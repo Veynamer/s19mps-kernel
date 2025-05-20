@@ -23,10 +23,12 @@
 #include <linux/usb/musb.h>
 #include <linux/phy/phy.h>
 #include <linux/workqueue.h>
+#include "prj/prj_config.h"
 
 struct musb;
 struct musb_hw_ep;
 struct musb_ep;
+struct musb_qh;
 
 /* Helper defines for struct musb->hwvers */
 #define MUSB_HWVERS_MAJOR(x)	((x >> 10) & 0x1f)
@@ -119,10 +121,14 @@ struct musb_io;
  * @fifo_offset: returns the fifo offset
  * @readb:	read 8 bits
  * @writeb:	write 8 bits
+ * @clearb:	could be clear-on-readb or W1C
  * @readw:	read 16 bits
  * @writew:	write 16 bits
+ * @clearw:	could be clear-on-readw or W1C
  * @read_fifo:	reads the fifo
  * @write_fifo:	writes to fifo
+ * @get_toggle:	platform specific get toggle function
+ * @set_toggle:	platform specific set toggle function
  * @dma_init:	platform specific dma init function
  * @dma_exit:	platform specific dma exit function
  * @init:	turns on clocks, sets up platform-specific registers, etc
@@ -138,6 +144,7 @@ struct musb_io;
  */
 struct musb_platform_ops {
 
+#define MUSB_DMA_SPRD		BIT(10)
 #define MUSB_G_NO_SKB_RESERVE	BIT(9)
 #define MUSB_DA8XX		BIT(8)
 #define MUSB_PRESERVE_SESSION	BIT(7)
@@ -161,12 +168,16 @@ struct musb_platform_ops {
 	u16	fifo_mode;
 	u32	(*fifo_offset)(u8 epnum);
 	u32	(*busctl_offset)(u8 epnum, u16 offset);
-	u8	(*readb)(const void __iomem *addr, unsigned offset);
-	void	(*writeb)(void __iomem *addr, unsigned offset, u8 data);
-	u16	(*readw)(const void __iomem *addr, unsigned offset);
-	void	(*writew)(void __iomem *addr, unsigned offset, u16 data);
+	u8	(*readb)(void __iomem *addr, u32 offset);
+	void	(*writeb)(void __iomem *addr, u32 offset, u8 data);
+	u8	(*clearb)(void __iomem *addr, u32 offset);
+	u16	(*readw)(void __iomem *addr, u32 offset);
+	void	(*writew)(void __iomem *addr, u32 offset, u16 data);
+	u16	(*clearw)(void __iomem *addr, u32 offset);
 	void	(*read_fifo)(struct musb_hw_ep *hw_ep, u16 len, u8 *buf);
 	void	(*write_fifo)(struct musb_hw_ep *hw_ep, u16 len, const u8 *buf);
+	u16	(*get_toggle)(struct musb_qh *qh, int is_out);
+	u16	(*set_toggle)(struct musb_qh *qh, int is_out, struct urb *urb);
 	struct dma_controller *
 		(*dma_init) (struct musb *musb, void __iomem *base);
 	void	(*dma_exit)(struct dma_controller *c);
@@ -176,11 +187,22 @@ struct musb_platform_ops {
 
 	int	(*vbus_status)(struct musb *musb);
 	void	(*set_vbus)(struct musb *musb, int on);
-
 	void	(*pre_root_reset_end)(struct musb *musb);
 	void	(*post_root_reset_end)(struct musb *musb);
 	int	(*phy_callback)(enum musb_vbus_id_status status);
 	void	(*clear_ep_rxintr)(struct musb *musb, int epnum);
+};
+
+struct musb_host_ops {
+	void    (*host_start)(struct musb *musb);
+	void    (*advance_schedule)(struct musb *musb, struct urb *urb,
+			struct musb_hw_ep *hw_ep, int is_in);
+	bool    (*tx_dma_program)(struct dma_controller *dma,
+			struct musb_hw_ep *hw_ep, struct musb_qh *qh,
+			struct urb *urb, u32 offset, u32 length);
+	void    (*rx_dma_program)(struct dma_channel *dma_channel,
+			struct musb *musb, u8 epnum, struct musb_qh *qh,
+			struct urb *urb, u32 offset, size_t len);
 };
 
 /*
@@ -227,6 +249,9 @@ struct musb_hw_ep {
 	/* peripheral side */
 	struct musb_ep		ep_in;			/* TX */
 	struct musb_ep		ep_out;			/* RX */
+#if IS_ENABLED(CONFIG_USB_MUSB_SPRD)
+	struct usb_host_endpoint	*hep[2];
+#endif
 };
 
 static inline struct musb_request *next_in_request(struct musb_hw_ep *hw_ep)
@@ -399,6 +424,10 @@ struct musb {
 	struct usb_gadget	g;			/* the gadget */
 	struct usb_gadget_driver *gadget_driver;	/* its driver */
 	struct usb_hcd		*hcd;			/* the usb hcd */
+	unsigned		fixup_ep0fifo:1;
+	bool			is_offload;     /* i2s mode for usb audio */
+	u8			offload_used;
+	int			shutdowning;
 
 	const struct musb_hdrc_config *config;
 
@@ -406,8 +435,64 @@ struct musb {
 #ifdef CONFIG_DEBUG_FS
 	struct dentry		*debugfs_root;
 #endif
+	bool			restore_complete;
+	struct	musb_host_ops	hops;
 };
 
+#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
+struct musb_reg_info {
+	struct regmap		*regmap_ptr;
+	u32			args[2];
+};
+
+struct sprd_glue {
+	struct device		*dev;
+	struct platform_device		*musb;
+	struct clk		*clk;
+	struct phy		*phy;
+	struct usb_phy		*xceiv;
+	struct regulator	*vbus;
+	struct wakeup_source	*pd_wake_lock;
+	struct regmap		*pmu;
+	struct musb_reg_info		usb31pllv_frc_on;
+	enum usb_dr_mode		dr_mode;
+	enum usb_dr_mode		wq_mode;
+
+	int		gpio_otg;  /* revo,otg_gpio */
+
+	int		vbus_irq;
+	int		usbid_irq;
+	spinlock_t		lock;
+	struct wakeup_source		*wake_lock;
+	struct work_struct		work;
+	struct delayed_work		recover_work;
+	struct extcon_dev		*edev;
+	struct extcon_dev		*id_edev;
+	struct notifier_block		hot_plug_nb;
+	struct notifier_block		vbus_nb;
+	struct notifier_block		id_nb;
+	struct notifier_block		audio_nb;
+
+	bool		bus_active;
+	bool		vbus_active;
+	bool		charging_mode;
+	bool		power_always_on;
+	bool		is_suspend;
+	int		host_disabled;
+	u32		usb_pub_slp_poll_offset;
+	u32		usb_pub_slp_poll_mask;
+	bool		suspending;
+	bool		retry_charger_detect;
+	int		usb_data_enabled;
+	enum usb_dr_mode		last_mode;
+	bool		use_singlefifo;
+	struct delayed_work		docking_boot_work;
+	struct delayed_work		docking_id_work;
+	int		key_id_irq;
+	struct regmap           *pmic;
+	bool		is_docking_online; //键盘在位标志
+};
+#endif
 /* This must be included after struct musb is defined */
 #include "musb_regs.h"
 
@@ -492,6 +577,8 @@ extern void musb_load_testpacket(struct musb *);
 extern irqreturn_t musb_interrupt(struct musb *);
 
 extern void musb_hnp_stop(struct musb *musb);
+
+extern int musb_reset_all_fifo_2_default(struct musb *musb);
 
 int musb_queue_resume_work(struct musb *musb,
 			   int (*callback)(struct musb *musb, void *data),

@@ -201,9 +201,6 @@ static inline bool policy_is_shared(struct cpufreq_policy *policy)
 	return cpumask_weight(policy->cpus) > 1;
 }
 
-/* /sys/devices/system/cpu/cpufreq: entry point for global variables */
-extern struct kobject *cpufreq_global_kobject;
-
 #ifdef CONFIG_CPU_FREQ
 unsigned int cpufreq_get(unsigned int cpu);
 unsigned int cpufreq_quick_get(unsigned int cpu);
@@ -257,6 +254,7 @@ static inline void cpufreq_stats_record_transition(struct cpufreq_policy *policy
 #define CPUFREQ_RELATION_L 0  /* lowest frequency at or above target */
 #define CPUFREQ_RELATION_H 1  /* highest frequency below or at target */
 #define CPUFREQ_RELATION_C 2  /* closest frequency to target */
+#define CPUFREQ_RELATION_F 3  /* fixed frequency to target */
 
 struct freq_attr {
 	struct attribute attr;
@@ -366,6 +364,14 @@ struct cpufreq_driver {
 	/* platform specific boost support code */
 	bool		boost_enabled;
 	int		(*set_boost)(int state);
+};
+
+/* for multi-level frequency control */
+struct ml_freq_ctrl {
+	struct cpufreq_policy *policy;
+	struct list_head		node;
+	unsigned int	high_level_limit_max;
+	unsigned int	high_level_limit_min;
 };
 
 /* flags */
@@ -922,6 +928,15 @@ static inline int cpufreq_table_find_index_c(struct cpufreq_policy *policy,
 		return cpufreq_table_find_index_dc(policy, target_freq);
 }
 
+static inline int cpufreq_table_find_index_f(struct cpufreq_policy *policy,
+					     unsigned int target_freq)
+{
+	if (policy->freq_table_sorted == CPUFREQ_TABLE_SORTED_ASCENDING)
+		return cpufreq_table_find_index_ac(policy, target_freq);
+	else
+		return cpufreq_table_find_index_dc(policy, target_freq);
+}
+
 static inline int cpufreq_frequency_table_target(struct cpufreq_policy *policy,
 						 unsigned int target_freq,
 						 unsigned int relation)
@@ -937,6 +952,8 @@ static inline int cpufreq_frequency_table_target(struct cpufreq_policy *policy,
 		return cpufreq_table_find_index_h(policy, target_freq);
 	case CPUFREQ_RELATION_C:
 		return cpufreq_table_find_index_c(policy, target_freq);
+	case CPUFREQ_RELATION_F:
+		return cpufreq_table_find_index_f(policy, target_freq);
 	default:
 		pr_err("%s: Invalid relation: %d\n", __func__, relation);
 		return -EINVAL;
@@ -977,19 +994,13 @@ static inline bool policy_has_boost_freq(struct cpufreq_policy *policy)
 }
 #endif
 
-#if defined(CONFIG_ENERGY_MODEL) && defined(CONFIG_CPU_FREQ_GOV_SCHEDUTIL)
-void sched_cpufreq_governor_change(struct cpufreq_policy *policy,
-			struct cpufreq_governor *old_gov);
-#else
-static inline void sched_cpufreq_governor_change(struct cpufreq_policy *policy,
-			struct cpufreq_governor *old_gov) { }
-#endif
-
 extern void arch_freq_prepare_all(void);
 extern unsigned int arch_freq_get_on_cpu(int cpu);
 
 extern void arch_set_freq_scale(struct cpumask *cpus, unsigned long cur_freq,
 				unsigned long max_freq);
+extern void arch_set_max_freq_scale(struct cpumask *cpus,
+				    unsigned long policy_max_freq);
 
 /* the following are really really optional */
 extern struct freq_attr cpufreq_freq_attr_scaling_available_freqs;

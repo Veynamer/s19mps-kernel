@@ -1605,8 +1605,27 @@ int xfrm6_output_finish(struct sock *sk, struct sk_buff *skb);
 int xfrm6_find_1stfragopt(struct xfrm_state *x, struct sk_buff *skb,
 			  u8 **prevhdr);
 
+#ifdef CONFIG_XFRM_FRAGMENT
+int get_xfrm_fragment(void);
+int xfrm6_rcv_encap(struct sk_buff *skb, int nexthdr, __be32 spi,
+		    int encap_type);
+extern int ip4_do_xfrm_frag(struct net *net, struct sock *sk,
+			    struct sk_buff *skb,
+			    int pmtu,
+			    int (*output)(struct net *,
+					  struct sock *,
+					  struct sk_buff *));
+extern int ip6_do_xfrm_frag(struct net *net, struct sock *sk,
+			    struct sk_buff *skb,
+			    int pmtu,
+			    int (*output)(struct net *,
+					  struct sock *,
+					  struct sk_buff *));
+#endif
+
 #ifdef CONFIG_XFRM
 int xfrm4_udp_encap_rcv(struct sock *sk, struct sk_buff *skb);
+int xfrm6_udp_encap_rcv(struct sock *sk, struct sk_buff *skb);
 int xfrm_user_policy(struct sock *sk, int optname,
 		     u8 __user *optval, int optlen);
 #else
@@ -1618,7 +1637,13 @@ static inline int xfrm_user_policy(struct sock *sk, int optname, u8 __user *optv
 static inline int xfrm4_udp_encap_rcv(struct sock *sk, struct sk_buff *skb)
 {
  	/* should not happen */
- 	kfree_skb(skb);
+	kfree_skb(skb);
+	return 0;
+}
+static inline int xfrm6_udp_encap_rcv(struct sock *sk, struct sk_buff *skb)
+{
+	/* should not happen */
+	kfree_skb(skb);
 	return 0;
 }
 #endif
@@ -1996,4 +2021,38 @@ static inline int xfrm_tunnel_check(struct sk_buff *skb, struct xfrm_state *x,
 
 	return 0;
 }
+
+extern const int xfrm_msg_min[XFRM_NR_MSGTYPES];
+extern const struct nla_policy xfrma_policy[XFRMA_MAX+1];
+
+struct xfrm_translator {
+	/* Allocate frag_list and put compat translation there */
+	int (*alloc_compat)(struct sk_buff *skb, const struct nlmsghdr *src);
+
+	/* Allocate nlmsg with 64-bit translaton of received 32-bit message */
+	struct nlmsghdr *(*rcv_msg_compat)(const struct nlmsghdr *nlh,
+			int maxtype, const struct nla_policy *policy,
+			struct netlink_ext_ack *extack);
+
+	/* Translate 32-bit user_policy from sockptr */
+	int (*xlate_user_policy_sockptr)(u8 **pdata32, int optlen);
+
+	struct module *owner;
+};
+
+#if IS_ENABLED(CONFIG_XFRM_USER_COMPAT)
+extern int xfrm_register_translator(struct xfrm_translator *xtr);
+extern int xfrm_unregister_translator(struct xfrm_translator *xtr);
+extern struct xfrm_translator *xfrm_get_translator(void);
+extern void xfrm_put_translator(struct xfrm_translator *xtr);
+#else
+static inline struct xfrm_translator *xfrm_get_translator(void)
+{
+	return NULL;
+}
+static inline void xfrm_put_translator(struct xfrm_translator *xtr)
+{
+}
+#endif
+
 #endif	/* _NET_XFRM_H */

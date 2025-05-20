@@ -179,6 +179,10 @@ alternative_cb_end
 
 	apply_ssbd 1, x22, x23
 
+#ifdef CONFIG_SHADOW_CALL_STACK
+	ldr	x18, [tsk, #TSK_TI_SCS]		// Restore shadow call stack
+	str	xzr, [tsk, #TSK_TI_SCS]		// Limit visibility of saved SCS
+#endif
 	.else
 	add	x21, sp, #S_FRAME_SIZE
 	get_current_task tsk
@@ -284,6 +288,12 @@ alternative_else_nop_endif
 	.if	\el == 0
 	ct_user_enter
 	.endif
+
+#ifdef CONFIG_SHADOW_CALL_STACK
+	.if	\el == 0
+	str	x18, [tsk, #TSK_TI_SCS]		// Save shadow call stack
+	.endif
+#endif
 
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
 	/*
@@ -394,6 +404,9 @@ alternative_else_nop_endif
 
 	.macro	irq_stack_entry
 	mov	x19, sp			// preserve the original sp
+#ifdef CONFIG_SHADOW_CALL_STACK
+	mov	x20, x18		// preserve the original shadow stack
+#endif
 
 	/*
 	 * Compare sp with the base of the task stack.
@@ -411,15 +424,24 @@ alternative_else_nop_endif
 
 	/* switch to the irq stack */
 	mov	sp, x26
+
+#ifdef CONFIG_SHADOW_CALL_STACK
+	/* also switch to the irq shadow stack */
+	ldr_this_cpu x18, irq_shadow_call_stack_ptr, x26
+#endif
+
 9998:
 	.endm
 
 	/*
-	 * x19 should be preserved between irq_stack_entry and
-	 * irq_stack_exit.
+	 * The callee-saved regs (x19-x29) should be preserved between
+	 * irq_stack_entry and irq_stack_exit.
 	 */
 	.macro	irq_stack_exit
 	mov	sp, x19
+#ifdef CONFIG_SHADOW_CALL_STACK
+	mov	x18, x20
+#endif
 	.endm
 
 /* GPRs used by entry code */
@@ -1208,6 +1230,41 @@ __entry_tramp_data_this_cpu_vector:
 #endif /* CONFIG_RANDOMIZE_BASE */
 #endif /* CONFIG_UNMAP_KERNEL_AT_EL0 */
 
+ENTRY(get_pt_regs)
+	stp x29, x30, [SP, #-0x30]!
+	stp x0, x1, [sp, #0x10]
+	stp x2, x3, [sp, #0x20]
+	stp x0, x1, [x0]
+	stp x2, x3, [x0, #0x10]!
+	stp x4, x5, [x0, #0x10]!
+	stp x6, x7, [x0, #0x10]!
+	stp x8, x9, [x0, #0x10]!
+	stp x10, x11, [x0, #0x10]!
+	stp x12, x13, [x0, #0x10]!
+	stp x14, x15, [x0, #0x10]!
+	stp x16, x17, [x0, #0x10]!
+	stp x18, x19, [x0, #0x10]!
+	stp x20, x21, [x0, #0x10]!
+	stp x22, x23, [x0, #0x10]!
+	stp x24, x25, [x0, #0x10]!
+	stp x26, x27, [x0, #0x10]!
+	stp x28, x29, [x0, #0x10]!
+	ldr x1, [sp] 					//get preceding sp
+	ldr x2, [x1, #0x8] 				//get preceding lr
+	str x2, [x0, #0x10]! 			//set lr
+	str x1, [x0, #0x8]! 			//set sp
+	mrs x1, NZCV 					//get pstate flag
+	mrs x2, DAIF
+	mrs x3, CurrentEL
+	orr x1, x1, x2
+	orr x1, x1, x3
+	stp lr, x1, [x0, #0x8]! 		//set pc,pstate
+	ldp x2, x3, [sp, #0x20]
+	ldp x0, x1, [sp, #0x10]
+	ldp x29,x30,[SP],#0x30
+	ret
+ENDPROC(get_pt_regs)
+
 /*
  * Exception vectors for spectre mitigations on entry from EL1 when
  * kpti is not in use.
@@ -1274,6 +1331,11 @@ ENTRY(cpu_switch_to)
 	ldr	lr, [x8]
 	mov	sp, x9
 	msr	sp_el0, x1
+#ifdef CONFIG_SHADOW_CALL_STACK
+	str	x18, [x0, #TSK_TI_SCS]
+	ldr	x18, [x1, #TSK_TI_SCS]
+	str	xzr, [x1, #TSK_TI_SCS]		// limit visibility of saved SCS
+#endif
 	ret
 ENDPROC(cpu_switch_to)
 NOKPROBE(cpu_switch_to)
@@ -1455,3 +1517,65 @@ alternative_else_nop_endif
 ENDPROC(__sdei_asm_handler)
 NOKPROBE(__sdei_asm_handler)
 #endif /* CONFIG_ARM_SDE_INTERFACE */
+
+#if IS_ENABLED(CONFIG_SPRD_HANG_DEBUG)
+ENTRY(entry_for_wdh_el0)
+	sub sp, sp, #S_FRAME_SIZE
+	stp x0, x1, [sp, #16 * 0]
+	stp x2, x3, [sp, #16 * 1]
+	stp x4, x5, [sp, #16 * 2]
+	stp x6, x7, [sp, #16 * 3]
+	stp x8, x9, [sp, #16 * 4]
+	stp x10, x11, [sp, #16 * 5]
+	stp x12, x13, [sp, #16 * 6]
+	stp x14, x15, [sp, #16 * 7]
+	stp x16, x17, [sp, #16 * 8]
+	stp x18, x19, [sp, #16 * 9]
+	stp x20, x21, [sp, #16 * 10]
+	stp x22, x23, [sp, #16 * 11]
+	stp x24, x25, [sp, #16 * 12]
+	stp x26, x27, [sp, #16 * 13]
+	stp x28, x29, [sp, #16 * 14]
+	add x21, sp, #S_FRAME_SIZE
+	stp lr, x21, [sp, #S_LR]
+	mov x0, sp
+#ifdef CONFIG_SHADOW_CALL_STACK
+	/* Restore shadow call stack x18 register */
+	ldr_this_cpu	tsk, __entry_task, x20
+	ldr	x18, [tsk, #TSK_TI_SCS]
+	str	xzr, [tsk, #TSK_TI_SCS]
+#endif
+	bl  wdh_atf_entry
+ENDPROC(entry_for_wdh_el0)
+NOKPROBE(entry_for_wdh_el0)
+
+ENTRY(entry_for_wdh_el1)
+	sub sp, sp, #S_FRAME_SIZE
+	stp x0, x1, [sp, #16 * 0]
+	stp x2, x3, [sp, #16 * 1]
+	stp x4, x5, [sp, #16 * 2]
+	stp x6, x7, [sp, #16 * 3]
+	stp x8, x9, [sp, #16 * 4]
+	stp x10, x11, [sp, #16 * 5]
+	stp x12, x13, [sp, #16 * 6]
+	stp x14, x15, [sp, #16 * 7]
+	stp x16, x17, [sp, #16 * 8]
+	stp x18, x19, [sp, #16 * 9]
+	stp x20, x21, [sp, #16 * 10]
+	stp x22, x23, [sp, #16 * 11]
+	stp x24, x25, [sp, #16 * 12]
+	stp x26, x27, [sp, #16 * 13]
+	stp x28, x29, [sp, #16 * 14]
+	add x21, sp, #S_FRAME_SIZE
+	stp lr, x21, [sp, #S_LR]
+	mov x0, sp
+	bl  wdh_atf_entry
+ENDPROC(entry_for_wdh_el1)
+NOKPROBE(entry_for_wdh_el1)
+
+ENTRY(entry_for_wdh_el2)
+	b .
+ENDPROC(entry_for_wdh_el2)
+NOKPROBE(entry_for_wdh_el2)
+#endif
+

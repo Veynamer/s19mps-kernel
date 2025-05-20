@@ -1,0 +1,8 @@
+&gpio_keys {
+      key-volumedown {
+              gpios = <&pmic_eic 4 GPIO_ACTIVE_HIGH>;
+      };
+      key-volumeup {
+              gpios = <&ap_gpio 124 GPIO_ACTIVE_LOW>;
+      };
+};

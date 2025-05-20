@@ -106,7 +106,6 @@ config PREEMPTIRQ_TRACEPOINTS
 
 config TRACING
 	bool
-	select DEBUG_FS
 	select RING_BUFFER
 	select STACKTRACE if STACKTRACE_SUPPORT
 	select TRACEPOINTS
@@ -210,6 +209,22 @@ config IRQSOFF_TRACER
 	  enabled. This option and the preempt-off timing option can be
 	  used together or separately.)
 
+config IRQSOFF_WARN
+	bool "Interrupts-off Latency Warning"
+	depends on IRQSOFF_TRACER
+	help
+	  This option measures the time spent in irqs-off critical sections,
+	  and print some information if the time exceeds the set threshold.
+
+config IRQSOFF_TRACER_BYTEDANCY
+	bool "Interrupts-off Latency Tracer By Bytedancy"
+	default n
+	help
+	  This option measures the time spent in irqs-off critical
+	  sections with less overhead than IRQSOFF_TRACER configuration
+	  by ByteDancy, all info. can get from github:
+	  https://github.com/bytedance/trace-irqoff
+
 config PREEMPT_TRACER
 	bool "Preemption-off Latency Tracer"
 	default n
@@ -234,6 +249,14 @@ config PREEMPT_TRACER
 	  (Note that kernel size and overhead increase with this option
 	  enabled. This option and the irqs-off timing option can be
 	  used together or separately.)
+
+config PREEMPT_WARN
+	bool "Preemption-off Latency Warning"
+	depends on PREEMPT_TRACER
+	help
+	  This option measures the time spent in preemption-off critical
+	  sections, and print some information if the time exceeds the set
+	  threshold.
 
 config SCHED_TRACER
 	bool "Scheduling Latency Tracer"
@@ -796,6 +819,19 @@ config GCOV_PROFILE_FTRACE
 
 	  Note that on a kernel compiled with this config, ftrace will
 	  run significantly slower.
+
+config SPRD_FTRACE_GCOV
+	bool "open gcov for ftrace"
+	depends on GCOV_PROFILE_MODULES
+	help
+	  Say Y here to enable gcov for ftrace
+
+config SPRD_KTP
+	bool "Register ktp"
+	default n
+	help
+	  The KTP(kernel trace point) is used to log discrete events in system
+	  in a buffer that can be post processed from sysdumps.
 
 endif # FTRACE
 

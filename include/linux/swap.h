@@ -20,6 +20,10 @@ struct bio;
 
 struct pagevec;
 
+#ifdef CONFIG_WRITEBACK_SWAPCACHE
+extern int writeback_swapcache;
+#endif
+
 #define SWAP_FLAG_PREFER	0x8000	/* set if swap priority specified */
 #define SWAP_FLAG_PRIO_MASK	0x7fff
 #define SWAP_FLAG_PRIO_SHIFT	0
@@ -308,6 +312,9 @@ struct vma_swap_readahead {
 
 /* linux/mm/workingset.c */
 void *workingset_eviction(struct page *page);
+#ifdef CONFIG_LRU_BALANCE_BASE_THRASHING
+void workingset_age_nonresident(struct lruvec *lruvec, unsigned long nr_pages);
+#endif
 void workingset_refault(struct page *page, void *shadow);
 void workingset_activation(struct page *page);
 
@@ -329,8 +336,14 @@ extern unsigned long nr_free_pagecache_pages(void);
 
 /* linux/mm/swap.c */
 extern void lru_cache_add(struct page *);
+#ifdef CONFIG_LRU_BALANCE_BASE_THRASHING
+extern void lru_note_cost(struct lruvec *lruvec, bool file,
+			  unsigned int nr_pages);
+extern void lru_note_cost_page(struct page *page);
+#else
 extern void lru_cache_add_anon(struct page *page);
 extern void lru_cache_add_file(struct page *page);
+#endif
 extern void lru_add_page_tail(struct page *page, struct page *page_tail,
 			 struct lruvec *lruvec, struct list_head *head);
 extern void activate_page(struct page *);
@@ -344,8 +357,14 @@ extern void deactivate_page(struct page *page);
 extern void mark_page_lazyfree(struct page *page);
 extern void swap_setup(void);
 
-extern void lru_cache_add_active_or_unevictable(struct page *page,
-						struct vm_area_struct *vma);
+extern void __lru_cache_add_active_or_unevictable(struct page *page,
+						unsigned long vma_flags);
+
+static inline void lru_cache_add_active_or_unevictable(struct page *page,
+						struct vm_area_struct *vma)
+{
+	return __lru_cache_add_active_or_unevictable(page, vma->vm_flags);
+}
 
 /* linux/mm/vmscan.c */
 extern unsigned long zone_reclaimable_pages(struct zone *zone);
@@ -362,8 +381,16 @@ extern unsigned long mem_cgroup_shrink_node(struct mem_cgroup *mem,
 						unsigned long *nr_scanned);
 extern unsigned long shrink_all_memory(unsigned long nr_pages);
 extern int vm_swappiness;
+#ifdef CONFIG_DIRECT_SWAPPINESS
+extern int direct_vm_swappiness;
+#endif
 extern int remove_mapping(struct address_space *mapping, struct page *page);
 extern unsigned long vm_total_pages;
+#ifdef CONFIG_RCC
+#define RCC_MODE_ANON   1
+#define RCC_MODE_FILE   2
+extern int try_to_free_pages_ex(int nr_pages, int mode);
+#endif
 
 extern unsigned long reclaim_pages(struct list_head *page_list);
 #ifdef CONFIG_NUMA
@@ -406,6 +433,9 @@ extern struct address_space *swapper_spaces[];
 	(&swapper_spaces[swp_type(entry)][swp_offset(entry) \
 		>> SWAP_ADDRESS_SPACE_SHIFT])
 extern unsigned long total_swapcache_pages(void);
+#ifdef CONFIG_SPRD_SYSDUMP
+extern unsigned long total_swapcache_pages_nolock(void);
+#endif
 extern void show_swap_cache_info(void);
 extern int add_to_swap(struct page *page);
 extern int add_to_swap_cache(struct page *, swp_entry_t, gfp_t);
@@ -446,6 +476,9 @@ static inline long get_nr_swap_pages(void)
 }
 
 extern void si_swapinfo(struct sysinfo *);
+#ifdef CONFIG_SPRD_SYSDUMP
+extern void si_swapinfo_nolock(struct sysinfo *);
+#endif
 extern swp_entry_t get_swap_page(struct page *page);
 extern void put_swap_page(struct page *page, swp_entry_t entry);
 extern swp_entry_t get_swap_page_of_type(int);
@@ -473,6 +506,9 @@ struct backing_dev_info;
 extern int init_swap_address_space(unsigned int type, unsigned long nr_pages);
 extern void exit_swap_address_space(unsigned int type);
 extern struct swap_info_struct *get_swap_device(swp_entry_t entry);
+#ifdef CONFIG_SPRD_SYSDUMP
+extern struct swap_info_struct *get_swap_device_nolock(swp_entry_t entry);
+#endif
 sector_t swap_page_sector(struct page *page);
 
 static inline void put_swap_device(struct swap_info_struct *si)
@@ -500,6 +536,11 @@ static inline struct swap_info_struct *swp_swap_info(swp_entry_t entry)
 
 #define si_swapinfo(val) \
 	do { (val)->freeswap = (val)->totalswap = 0; } while (0)
+#ifdef CONFIG_SPRD_SYSDUMP
+#define total_swapcache_pages_nolock()		0UL
+#define si_swapinfo_nolock(val) \
+	do { (val)->freeswap = (val)->totalswap = 0; } while (0)
+#endif
 /* only sparc can not include linux/pagemap.h in this file
  * so leave put_page and release_pages undeclared... */
 #define free_page_and_swap_cache(page) \
@@ -685,7 +726,11 @@ static inline long mem_cgroup_get_nr_swap_pages(struct mem_cgroup *memcg)
 
 static inline bool mem_cgroup_swap_full(struct page *page)
 {
+#ifdef CONFIG_WRITEBACK_SWAPCACHE
+	return writeback_swapcache ? true : vm_swap_full();
+#else
 	return vm_swap_full();
+#endif
 }
 #endif
 

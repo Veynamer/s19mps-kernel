@@ -7,10 +7,21 @@
 
 #include "pelt.h"
 
+#include <trace/hooks/sched.h>
+
 int sched_rr_timeslice = RR_TIMESLICE;
 int sysctl_sched_rr_timeslice = (MSEC_PER_SEC / HZ) * RR_TIMESLICE;
 /* More than 4 hours if BW_SHIFT equals 20. */
 static const u64 max_rt_runtime = MAX_BW;
+
+#ifdef CONFIG_SMP
+static unsigned int capacity_margin = 1280;
+
+static unsigned long capacity_of(int cpu)
+{
+	return cpu_rq(cpu)->cpu_capacity;
+}
+#endif
 
 static int do_sched_rt_period_timer(struct rt_bandwidth *rt_b, int overrun);
 
@@ -114,8 +125,6 @@ static void destroy_rt_bandwidth(struct rt_bandwidth *rt_b)
 {
 	hrtimer_cancel(&rt_b->rt_period_timer);
 }
-
-#define rt_entity_is_task(rt_se) (!(rt_se)->my_q)
 
 static inline struct task_struct *rt_task_of(struct sched_rt_entity *rt_se)
 {
@@ -229,8 +238,6 @@ err:
 
 #else /* CONFIG_RT_GROUP_SCHED */
 
-#define rt_entity_is_task(rt_se) (1)
-
 static inline struct task_struct *rt_task_of(struct sched_rt_entity *rt_se)
 {
 	return container_of(rt_se, struct task_struct, rt);
@@ -270,7 +277,12 @@ static void pull_rt_task(struct rq *this_rq);
 static inline bool need_pull_rt_task(struct rq *rq, struct task_struct *prev)
 {
 	/* Try to pull RT tasks here if we lower this rq's prio */
+#ifdef CONFIG_SPRD_CORE_CTL
+	return rq->rt.highest_prio.curr > prev->prio &&
+	       !cpu_isolated(cpu_of(rq));
+#else
 	return rq->rt.highest_prio.curr > prev->prio;
+#endif
 }
 
 static inline int rt_overloaded(struct rq *rq)
@@ -443,6 +455,45 @@ static inline int on_rt_rq(struct sched_rt_entity *rt_se)
 {
 	return rt_se->on_rq;
 }
+
+#ifdef CONFIG_UCLAMP_TASK
+/*
+ * Verify the fitness of task @p to run on @cpu taking into account the uclamp
+ * settings.
+ *
+ * This check is only important for heterogeneous systems where uclamp_min value
+ * is higher than the capacity of a @cpu. For non-heterogeneous system this
+ * function will always return true.
+ *
+ * The function will return true if the capacity of the @cpu is >= the
+ * uclamp_min and false otherwise.
+ *
+ * Note that uclamp_min will be clamped to uclamp_max if uclamp_min
+ * > uclamp_max.
+ */
+static inline bool rt_task_fits_capacity(struct task_struct *p, int cpu)
+{
+	unsigned int min_cap;
+	unsigned int max_cap;
+	unsigned int cpu_cap;
+
+	/* Only heterogeneous systems can benefit from this check */
+	if (!static_branch_unlikely(&sched_asym_cpucapacity))
+		return true;
+
+	min_cap = uclamp_eff_value(p, UCLAMP_MIN);
+	max_cap = uclamp_eff_value(p, UCLAMP_MAX);
+
+	cpu_cap = capacity_orig_of(cpu);
+
+	return cpu_cap >= min(min_cap, max_cap);
+}
+#else
+static inline bool rt_task_fits_capacity(struct task_struct *p, int cpu)
+{
+	return true;
+}
+#endif
 
 #ifdef CONFIG_RT_GROUP_SCHED
 
@@ -1405,6 +1456,13 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 {
 	struct task_struct *curr;
 	struct rq *rq;
+	bool test;
+	int target_cpu = -1;
+
+	trace_android_rvh_select_task_rq_rt(p, cpu, sd_flag,
+					flags, &target_cpu);
+	if (target_cpu >= 0)
+		return target_cpu;
 
 	/* For anything but wake ups, just return the task_cpu */
 	if (sd_flag != SD_BALANCE_WAKE && sd_flag != SD_BALANCE_FORK)
@@ -1436,11 +1494,24 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 	 *
 	 * This test is optimistic, if we get it wrong the load-balancer
 	 * will have to sort it out.
+	 *
+	 * We take into account the capacity of the CPU to ensure it fits the
+	 * requirement of the task - which is only important on heterogeneous
+	 * systems like big.LITTLE.
 	 */
-	if (curr && unlikely(rt_task(curr)) &&
-	    (curr->nr_cpus_allowed < 2 ||
-	     curr->prio <= p->prio)) {
+	test = curr &&
+	       unlikely(rt_task(curr)) &&
+	       (curr->nr_cpus_allowed < 2 || curr->prio <= p->prio);
+
+	if (sched_energy_enabled() || test || !rt_task_fits_capacity(p, cpu)) {
 		int target = find_lowest_rq(p);
+
+		/*
+		 * Bail out if we were forcing a migration to find a better
+		 * fitting CPU but our search failed.
+		 */
+		if (!test && target != -1 && !rt_task_fits_capacity(p, target))
+			goto out_unlock;
 
 		/*
 		 * Don't bother moving it if the destination CPU is
@@ -1450,6 +1521,8 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 		    p->prio < cpu_rq(target)->rt.highest_prio.curr)
 			cpu = target;
 	}
+
+out_unlock:
 	rcu_read_unlock();
 
 out:
@@ -1470,8 +1543,8 @@ static void check_preempt_equal_prio(struct rq *rq, struct task_struct *p)
 	 * p is migratable, so let's not schedule it and
 	 * see if it is pushed or pulled somewhere else.
 	 */
-	if (p->nr_cpus_allowed != 1
-	    && cpupri_find(&rq->rd->cpupri, p, NULL))
+	if (p->nr_cpus_allowed != 1 &&
+	    cpupri_find(&rq->rd->cpupri, p, NULL))
 		return;
 
 	/*
@@ -1652,6 +1725,12 @@ static int find_lowest_rq(struct task_struct *task)
 	struct cpumask *lowest_mask = this_cpu_cpumask_var_ptr(local_cpu_mask);
 	int this_cpu = smp_processor_id();
 	int cpu      = task_cpu(task);
+	int ret;
+	int lowest_cpu = -1;
+
+	trace_android_rvh_find_lowest_rq(task, lowest_mask, &lowest_cpu);
+	if (lowest_cpu >= 0)
+		return lowest_cpu;
 
 	/* Make sure the mask is initialized first */
 	if (unlikely(!lowest_mask))
@@ -1660,8 +1739,79 @@ static int find_lowest_rq(struct task_struct *task)
 	if (task->nr_cpus_allowed == 1)
 		return -1; /* No other targets possible */
 
-	if (!cpupri_find(&task_rq(task)->rd->cpupri, task, lowest_mask))
+	/*
+	 * If we're on asym system ensure we consider the different capacities
+	 * of the CPUs when searching for the lowest_mask.
+	 */
+	if (static_branch_unlikely(&sched_asym_cpucapacity)) {
+
+		ret = cpupri_find_fitness(&task_rq(task)->rd->cpupri,
+					  task, lowest_mask,
+					  rt_task_fits_capacity);
+	} else {
+
+		ret = cpupri_find(&task_rq(task)->rd->cpupri,
+				  task, lowest_mask);
+	}
+
+	if (!ret)
 		return -1; /* No targets found */
+
+	if (sched_energy_enabled()) {
+		int i;
+		struct cpumask tmp_mask;
+
+#ifdef CONFIG_SPRD_CORE_CTL
+		cpumask_t allowed_mask;
+
+		cpumask_andnot(&allowed_mask, &min_cap_cpu_mask,
+				cpu_isolated_mask);
+		cpumask_and(&tmp_mask, lowest_mask, &allowed_mask);
+#else
+		cpumask_and(&tmp_mask, lowest_mask, &min_cap_cpu_mask);
+#endif
+
+		if (cpumask_weight(&tmp_mask)) {
+			unsigned long total_util = 0, total_cap = 0;
+
+			for_each_cpu(i, &tmp_mask) {
+				struct rq *rq = cpu_rq(i);
+
+				total_util += cpu_util_cfs(rq) + cpu_util_rt(rq);
+				total_cap += capacity_orig_of(i);
+			}
+
+			/*
+			 * The margin used when comparing utilization
+			 * with CPU capacity.
+			 *
+			 * (default: ~20%)
+			 */
+			if (total_util * capacity_margin < total_cap * 1024)
+				cpumask_copy(lowest_mask, &tmp_mask);
+		}
+
+#ifdef CONFIG_SPRD_CORE_CTL
+		/* fast path for prev_cpu */
+		if (cpumask_test_cpu(cpu, lowest_mask) && idle_cpu(cpu) &&
+		    !cpu_isolated(cpu))
+			return cpu;
+
+		for_each_cpu(i, lowest_mask) {
+			if (idle_cpu(i) && !cpu_isolated(i))
+				return i;
+		}
+#else
+		/* fast path for prev_cpu */
+		if (cpumask_test_cpu(cpu, lowest_mask) && idle_cpu(cpu))
+			return cpu;
+
+		for_each_cpu(i, lowest_mask) {
+			if (idle_cpu(i))
+				return i;
+		}
+#endif
+	}
 
 	/*
 	 * At this point we have built a mask of CPUs representing the
@@ -2106,6 +2256,25 @@ static void pull_rt_task(struct rq *this_rq)
 		    this_rq->rt.highest_prio.curr)
 			continue;
 
+		if (sched_energy_enabled()) {
+			unsigned long this_util = cpu_util_cfs(cpu_rq(this_cpu));
+			unsigned long util = cpu_util_cfs(cpu_rq(cpu));
+			unsigned long this_orig = capacity_orig_of(this_cpu);
+			unsigned long cap_orig = capacity_orig_of(cpu);
+
+			/* If local cpu is overutilized, abort pull */
+			if (this_util * capacity_margin >
+			    capacity_of(this_cpu) * 1024)
+				break;
+
+			/* Local cpu is the bigger one and the src cpu is
+			 * not overutilized, drop pull from src cpu
+			 */
+			if (this_orig > cap_orig &&
+			    util * capacity_margin < capacity_of(cpu) * 1024)
+				continue;
+		}
+
 		/*
 		 * We can potentially drop this_rq's lock in
 		 * double_lock_balance, and another CPU could
@@ -2164,12 +2333,14 @@ skip:
  */
 static void task_woken_rt(struct rq *rq, struct task_struct *p)
 {
-	if (!task_running(rq, p) &&
-	    !test_tsk_need_resched(rq->curr) &&
-	    p->nr_cpus_allowed > 1 &&
-	    (dl_task(rq->curr) || rt_task(rq->curr)) &&
-	    (rq->curr->nr_cpus_allowed < 2 ||
-	     rq->curr->prio <= p->prio))
+	bool need_to_push = !task_running(rq, p) &&
+			    !test_tsk_need_resched(rq->curr) &&
+			    p->nr_cpus_allowed > 1 &&
+			    (dl_task(rq->curr) || rt_task(rq->curr)) &&
+			    (rq->curr->nr_cpus_allowed < 2 ||
+			     rq->curr->prio <= p->prio);
+
+	if (need_to_push)
 		push_rt_tasks(rq);
 }
 
@@ -2208,9 +2379,14 @@ static void switched_from_rt(struct rq *rq, struct task_struct *p)
 	 * we may need to handle the pulling of RT tasks
 	 * now.
 	 */
+#ifdef CONFIG_SPRD_CORE_CTL
+	if (!task_on_rq_queued(p) || rq->rt.rt_nr_running ||
+	    cpu_isolated(cpu_of(rq)))
+		return;
+#else
 	if (!task_on_rq_queued(p) || rq->rt.rt_nr_running)
 		return;
-
+#endif
 	rt_queue_pull_task(rq);
 }
 
@@ -2339,6 +2515,8 @@ static void task_tick_rt(struct rq *rq, struct task_struct *p, int queued)
 
 	update_curr_rt(rq);
 	update_rt_rq_load_avg(rq_clock_pelt(rq), rq, 1);
+	/* Kick cpufreq (see the comment in kernel/sched/sched.h). */
+	cpufreq_update_util(rq, 0);
 
 	watchdog(rq, p);
 

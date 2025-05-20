@@ -123,6 +123,24 @@ of_coresight_count_ports(struct device_node *port_parent)
 	return i;
 }
 
+struct device *
+of_coresight_get_device_by_node(struct device_node *endpoint)
+{
+	struct fwnode_handle *rdev_fwnode;
+	struct device *rdev = NULL;
+
+	rdev_fwnode = of_fwnode_handle(endpoint);
+	/* If the remote device is not available, defer probing */
+	if (IS_ERR_OR_NULL(rdev_fwnode))
+		return NULL;
+
+	rdev = coresight_find_device_by_fwnode(rdev_fwnode);
+
+	return rdev;
+}
+
+EXPORT_SYMBOL_GPL(of_coresight_get_device_by_node);
+
 static void of_coresight_get_ports(const struct device_node *node,
 				   int *nr_inport, int *nr_outport)
 {
@@ -481,7 +499,7 @@ static inline bool acpi_validate_dsd_graph(const union acpi_object *graph)
 }
 
 /* acpi_get_dsd_graph	- Find the _DSD Graph property for the given device. */
-const union acpi_object *
+static const union acpi_object *
 acpi_get_dsd_graph(struct acpi_device *adev)
 {
 	int i;
@@ -544,7 +562,7 @@ acpi_validate_coresight_graph(const union acpi_object *cs_graph)
  * Returns the pointer to the CoreSight Graph Package when found. Otherwise
  * returns NULL.
  */
-const union acpi_object *
+static const union acpi_object *
 acpi_get_coresight_graph(struct acpi_device *adev)
 {
 	const union acpi_object *graph_list, *graph;

@@ -91,6 +91,13 @@ static int etm4_enable_hw(struct etmv4_drvdata *drvdata)
 	struct etmv4_config *config = &drvdata->config;
 	struct device *etm_dev = &drvdata->csdev->dev;
 
+	/* set cs clock as the max one */
+	if (clk_set_parent(drvdata->clk_cs, drvdata->clk_cs_src))
+		return 0;
+
+	if (clk_prepare_enable(drvdata->clk_cs))
+		return 0;
+
 	CS_UNLOCK(drvdata->base);
 
 	etm4_os_unlock(drvdata);
@@ -474,6 +481,9 @@ static void etm4_disable_hw(void *info)
 
 	CS_LOCK(drvdata->base);
 
+	/* unprepare cs clock */
+	clk_disable_unprepare(drvdata->clk_cs);
+
 	dev_dbg(&drvdata->csdev->dev,
 		"cpu: %d disable smp call done\n", drvdata->cpu);
 }
@@ -740,8 +750,8 @@ static void etm4_set_default_config(struct etmv4_config *config)
 	/* disable stalling */
 	config->stall_ctrl = 0x0;
 
-	/* enable trace synchronization every 4096 bytes, if available */
-	config->syncfreq = 0xC;
+	/* enable trace synchronization every 256 bytes, if available */
+	config->syncfreq = 0x8;
 
 	/* disable timestamp event */
 	config->ts_ctrl = 0x0;
@@ -1085,6 +1095,35 @@ static void etm4_init_trace_id(struct etmv4_drvdata *drvdata)
 	drvdata->trcid = coresight_get_trace_id(drvdata->cpu);
 }
 
+int etm4_enable_source_show(struct device *dev)
+{
+	int val;
+	struct etmv4_drvdata *drvdata = dev_get_drvdata(dev);
+
+	if (!drvdata)
+		return 0;
+
+	val = coresight_enable_source_show_export(drvdata->csdev);
+
+	return val;
+}
+
+int etm4_enable_source_store(struct device *dev, int val)
+{
+	int ret;
+	struct etmv4_drvdata *drvdata = dev_get_drvdata(dev);
+
+	if (!drvdata)
+		return -1;
+
+	if (val)
+		ret = coresight_enable_source_store_export(drvdata->csdev, true);
+	else
+		ret = coresight_enable_source_store_export(drvdata->csdev, false);
+
+	return ret;
+}
+
 static int etm4_probe(struct amba_device *adev, const struct amba_id *id)
 {
 	int ret;
@@ -1107,6 +1146,19 @@ static int etm4_probe(struct amba_device *adev, const struct amba_id *id)
 		return PTR_ERR(base);
 
 	drvdata->base = base;
+
+	/* get coresight and timestamp clock source */
+	drvdata->clk_cs = devm_clk_get(dev, "clk_cs");
+	if (IS_ERR(drvdata->clk_cs)) {
+		drvdata->clk_cs = NULL;
+		dev_warn(dev, "There is no etm clock.\n");
+	}
+
+	drvdata->clk_cs_src = devm_clk_get(dev, "cs_src");
+	if (IS_ERR(drvdata->clk_cs_src)) {
+		drvdata->clk_cs_src = NULL;
+		dev_warn(dev, "There is no etm source clock.\n");
+	}
 
 	spin_lock_init(&drvdata->spinlock);
 
@@ -1204,9 +1256,12 @@ static struct amba_cs_uci_id uci_id_etm4[] = {
 
 static const struct amba_id etm4_ids[] = {
 	CS_AMBA_ID(0x000bb95d),			/* Cortex-A53 */
+	CS_AMBA_ID(0x000bbd05),			/* Cortex-A55 Ananke */
 	CS_AMBA_ID(0x000bb95e),			/* Cortex-A57 */
 	CS_AMBA_ID(0x000bb95a),			/* Cortex-A72 */
 	CS_AMBA_ID(0x000bb959),			/* Cortex-A73 */
+	CS_AMBA_ID(0x000bbd0a),			/* Cortex-A75 Promethus */
+	CS_AMBA_ID(0x000bbd0b),			/* Cortex-A76 Enyo */
 	CS_AMBA_UCI_ID(0x000bb9da, uci_id_etm4),/* Cortex-A35 */
 	CS_AMBA_UCI_ID(0x000f0205, uci_id_etm4),/* Qualcomm Kryo */
 	CS_AMBA_UCI_ID(0x000f0211, uci_id_etm4),/* Qualcomm Kryo */

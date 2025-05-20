@@ -2580,6 +2580,14 @@ int udp_lib_setsockopt(struct sock *sk, int level, int optname,
 			udp_tunnel_encap_enable(sk->sk_socket);
 			release_sock(sk);
 			break;
+#ifdef CONFIG_XFRM_FRAGMENT
+		case UDP_ENCAP_ESPINUDP_V6:
+			up->encap_type = val;
+			up->encap_rcv = xfrm6_udp_encap_rcv;
+			udpv6_encap_enable();
+			break;
+#endif
+
 		default:
 			err = -ENOPROTOOPT;
 			break;
@@ -2602,9 +2610,12 @@ int udp_lib_setsockopt(struct sock *sk, int level, int optname,
 
 	case UDP_GRO:
 		lock_sock(sk);
+
+		/* when enabling GRO, accept the related GSO packet type */
 		if (valbool)
 			udp_tunnel_encap_enable(sk->sk_socket);
 		up->gro_enabled = valbool;
+		up->accept_udp_l4 = valbool;
 		release_sock(sk);
 		break;
 

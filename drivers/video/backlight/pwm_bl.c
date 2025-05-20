@@ -19,7 +19,12 @@
 #include <linux/pwm_backlight.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
+#include "prj/prj_config.h"
 
+#ifndef BACKLIGHT_RESUME_DELAY_TIME
+#define BACKLIGHT_RESUME_DELAY_TIME   0
+#endif
 struct pwm_bl_data {
 	struct pwm_device	*pwm;
 	struct device		*dev;
@@ -106,6 +111,8 @@ static int compute_duty_cycle(struct pwm_bl_data *pb, int brightness)
 	return duty_cycle + lth;
 }
 
+static bool bEnterIntoSuspend = false;
+
 static int pwm_backlight_update_status(struct backlight_device *bl)
 {
 	struct pwm_bl_data *pb = bl_get_data(bl);
@@ -121,13 +128,22 @@ static int pwm_backlight_update_status(struct backlight_device *bl)
 		brightness = pb->notify(pb->dev, brightness);
 
 	if (brightness > 0) {
+
+		if(bEnterIntoSuspend == true){
+			if(BACKLIGHT_RESUME_DELAY_TIME)
+				msleep(BACKLIGHT_RESUME_DELAY_TIME);
+			bEnterIntoSuspend = false;
+		}
 		pwm_get_state(pb->pwm, &state);
 		state.duty_cycle = compute_duty_cycle(pb, brightness);
 		pwm_apply_state(pb->pwm, &state);
 		pwm_backlight_power_on(pb);
-	} else
+	} 
+	else {
 		pwm_backlight_power_off(pb);
-
+		bEnterIntoSuspend = true;
+	}
+	
 	if (pb->notify_after)
 		pb->notify_after(pb->dev, brightness);
 
@@ -618,7 +634,8 @@ static int pwm_backlight_probe(struct platform_device *pdev)
 		pb->scale = data->max_brightness;
 	}
 
-	pb->lth_brightness = data->lth_brightness * (state.period / pb->scale);
+	pb->lth_brightness = data->lth_brightness * (div_u64(state.period,
+				pb->scale));
 
 	props.type = BACKLIGHT_RAW;
 	props.max_brightness = data->max_brightness;

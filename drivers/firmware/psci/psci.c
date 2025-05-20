@@ -27,6 +27,12 @@
 #include <asm/smp_plat.h>
 #include <asm/suspend.h>
 
+#include <trace/hooks/psci.h>
+
+#ifdef CONFIG_ENABLE_SPRD_DEEP_SLEEP_TRACING
+#include <sprd_past_record.h>
+#endif
+
 /*
  * While a 64-bit OS can make calls with SMC32 calling conventions, for some
  * calls it is necessary to use SMC64 to pass or return 64-bit values.
@@ -49,6 +55,12 @@ static int resident_cpu = -1;
 
 bool psci_tos_resident_on(int cpu)
 {
+	bool resident = false;
+
+	trace_android_vh_psci_tos_resident_on(cpu, &resident);
+	if (resident)
+		return resident;
+
 	return cpu == resident_cpu;
 }
 
@@ -173,6 +185,11 @@ static int psci_cpu_suspend(u32 state, unsigned long entry_point)
 {
 	int err;
 	u32 fn;
+	bool deny = false;
+
+	trace_android_vh_psci_cpu_suspend(state, &deny);
+	if (deny)
+		return -EPERM;
 
 	fn = psci_function_id[PSCI_FN_CPU_SUSPEND];
 	err = invoke_psci_fn(fn, state, entry_point, 0);
@@ -265,7 +282,8 @@ static int get_set_conduit_method(struct device_node *np)
 	return 0;
 }
 
-static void psci_sys_reset(enum reboot_mode reboot_mode, const char *cmd)
+static int psci_sys_reset(struct notifier_block *nb, unsigned long action,
+			  void *data)
 {
 	if ((reboot_mode == REBOOT_WARM || reboot_mode == REBOOT_SOFT) &&
 	    psci_system_reset2_supported) {
@@ -278,7 +296,14 @@ static void psci_sys_reset(enum reboot_mode reboot_mode, const char *cmd)
 	} else {
 		invoke_psci_fn(PSCI_0_2_FN_SYSTEM_RESET, 0, 0, 0);
 	}
+
+	return NOTIFY_DONE;
 }
+
+static struct notifier_block psci_sys_reset_nb = {
+	.notifier_call = psci_sys_reset,
+	.priority = 129,
+};
 
 static void psci_sys_poweroff(void)
 {
@@ -314,6 +339,9 @@ int psci_cpu_suspend_enter(u32 state)
 
 static int psci_system_suspend(unsigned long unused)
 {
+#ifdef CONFIG_ENABLE_SPRD_DEEP_SLEEP_TRACING
+	sprd_system_deep_state_enter(SPRD_DEEP_STATE_SUSPEND_IN_SML);
+#endif
 	return invoke_psci_fn(PSCI_FN_NATIVE(1_0, SYSTEM_SUSPEND),
 			      __pa_symbol(cpu_resume), 0, 0);
 }
@@ -446,7 +474,7 @@ static void __init psci_0_2_set_functions(void)
 
 	psci_ops.migrate_info_type = psci_migrate_info_type;
 
-	arm_pm_restart = psci_sys_reset;
+	register_restart_handler(&psci_sys_reset_nb);
 
 	pm_power_off = psci_sys_poweroff;
 }

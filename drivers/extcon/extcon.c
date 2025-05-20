@@ -1111,7 +1111,12 @@ int extcon_dev_register(struct extcon_dev *edev)
 			"extcon device name is null\n");
 		return -EINVAL;
 	}
-	dev_set_name(&edev->dev, "extcon%lu",
+
+	if (strstr(edev->name, "dptx"))
+		dev_set_name(&edev->dev, "audio%lu",
+			(unsigned long)atomic_inc_return(&edev_no));
+	else
+		dev_set_name(&edev->dev, "extcon%lu",
 			(unsigned long)atomic_inc_return(&edev_no));
 
 	if (edev->max_supported) {
@@ -1412,6 +1417,7 @@ const char *extcon_get_edev_name(struct extcon_dev *edev)
 {
 	return !edev ? NULL : edev->name;
 }
+EXPORT_SYMBOL_GPL(extcon_get_edev_name);
 
 static int __init extcon_class_init(void)
 {

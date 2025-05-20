@@ -1,0 +1,9 @@
+&extcon_gpio {
+	/delete-property/ id-gpio;
+};
+&usb {
+	status = "okay";
+	extcon = <&extcon_gpio>,<&pmic_typec>;
+	vbus-supply = <&vddvbus>;
+};
+

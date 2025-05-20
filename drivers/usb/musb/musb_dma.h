@@ -35,6 +35,12 @@ struct musb_hw_ep;
  *    whether shared with the Inventra core or separate.
  */
 
+#define MUSB_HSDMA_BASE		0x200
+#define MUSB_HSDMA_INTR		(MUSB_HSDMA_BASE + 0)
+#define MUSB_HSDMA_CONTROL	0x4
+#define MUSB_HSDMA_ADDRESS	0x8
+#define MUSB_HSDMA_COUNT	0xc
+
 #define	DMA_ADDR_INVALID	(~(dma_addr_t)0)
 
 #ifdef CONFIG_MUSB_PIO_ONLY
@@ -78,6 +84,12 @@ struct musb_hw_ep;
 	(musb_dma_cppi(musb) || musb_dma_cppi41(musb))
 #else
 #define	is_cppi_enabled(musb)	0
+#endif
+
+#if IS_ENABLED(CONFIG_USB_SPRD_DMA)
+#define musb_dma_sprd(musb)	(musb->ops->quirks & MUSB_DMA_SPRD)
+#else
+#define musb_dma_sprd(musb)	0
 #endif
 
 /*
@@ -191,6 +203,9 @@ extern void (*musb_dma_controller_destroy)(struct dma_controller *);
 extern struct dma_controller *
 musbhs_dma_controller_create(struct musb *musb, void __iomem *base);
 extern void musbhs_dma_controller_destroy(struct dma_controller *c);
+extern struct dma_controller *
+musbhs_dma_controller_create_noirq(struct musb *musb, void __iomem *base);
+extern irqreturn_t dma_controller_irq(int irq, void *private_data);
 
 extern struct dma_controller *
 tusb_dma_controller_create(struct musb *musb, void __iomem *base);

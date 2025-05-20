@@ -33,6 +33,14 @@ unsigned long topology_get_freq_scale(int cpu)
 	return per_cpu(freq_scale, cpu);
 }
 
+DECLARE_PER_CPU(unsigned long, max_freq_scale);
+
+static inline
+unsigned long topology_get_max_freq_scale(struct sched_domain *sd, int cpu)
+{
+	return per_cpu(max_freq_scale, cpu);
+}
+
 struct cpu_topology {
 	int thread_id;
 	int core_id;
@@ -53,6 +61,7 @@ extern struct cpu_topology cpu_topology[NR_CPUS];
 #define topology_llc_cpumask(cpu)	(&cpu_topology[cpu].llc_sibling)
 void init_cpu_topology(void);
 void store_cpu_topology(unsigned int cpuid);
+int __init parse_dt_topology(void);
 const struct cpumask *cpu_coregroup_mask(int cpu);
 void update_siblings_masks(unsigned int cpu);
 void remove_cpu_topology(unsigned int cpuid);

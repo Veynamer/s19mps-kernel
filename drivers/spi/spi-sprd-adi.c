@@ -16,6 +16,9 @@
 #include <linux/reboot.h>
 #include <linux/spi/spi.h>
 #include <linux/sizes.h>
+#if IS_ENABLED(CONFIG_SPRD_SIPC)
+#include <linux/sipc.h>
+#endif
 
 /* Registers definitions for ADI controller */
 #define REG_ADI_CTRL0			0x4
@@ -47,6 +50,7 @@
 #define RD_ADDR_MASK			GENMASK(30, 16)
 
 /* Bits definitions for register REG_ADI_ARM_FIFO_STS */
+#define BIT_ARM_WR_FREQ			BIT(31)
 #define BIT_FIFO_FULL			BIT(11)
 #define BIT_FIFO_EMPTY			BIT(10)
 
@@ -54,8 +58,9 @@
  * ADI slave devices include RTC, ADC, regulator, charger, thermal and so on.
  * The slave devices address offset is always 0x8000 and size is 4K.
  */
-#define ADI_SLAVE_ADDR_SIZE		SZ_4K
-#define ADI_SLAVE_OFFSET		0x8000
+#define ADI_SLAVE_ADDR_SIZE		SZ_128K
+#define ADI_15BIT_CHANNEL_OFFSET	0x20000
+#define ADI_CHANNEL_OFFSET		0x8000
 
 /* Timeout (ms) for the trylock of hardware spinlocks */
 #define ADI_HWSPINLOCK_TIMEOUT		5000
@@ -67,26 +72,60 @@
 
 #define ADI_FIFO_DRAIN_TIMEOUT		1000
 #define ADI_READ_TIMEOUT		2000
-#define REG_ADDR_LOW_MASK		GENMASK(11, 0)
+#define ADI_WRITE_TIMEOUT		2000
+#define REG_ADDR_LOW_MASK		GENMASK(16, 0)
+#define RDBACK_ADDR_OFFSET		2
 
 /* Registers definitions for PMIC watchdog controller */
-#define REG_WDG_LOAD_LOW		0x80
-#define REG_WDG_LOAD_HIGH		0x84
-#define REG_WDG_CTRL			0x88
-#define REG_WDG_LOCK			0xa0
+#define REG_WDG_LOAD_LOW		0x0
+#define REG_WDG_LOAD_HIGH		0x4
+#define REG_WDG_CTRL			0x8
+#define REG_WDG_LOCK			0x20
 
 /* Bits definitions for register REG_WDG_CTRL */
 #define BIT_WDG_RUN			BIT(1)
+#define BIT_WDG_NEW			BIT(2)
 #define BIT_WDG_RST			BIT(3)
+
+/* Bits definitions for register REG_MODULE_EN */
+#define BIT_WDG_EN			BIT(2)
 
 /* Registers definitions for PMIC */
 #define PMIC_RST_STATUS			0xee8
 #define PMIC_MODULE_EN			0xc08
 #define PMIC_CLK_EN			0xc18
-#define BIT_WDG_EN			BIT(2)
+#define PMIC_WDG_BASE			0x80
+#define SC2730_RST_STATUS		0x1bac
+#define SC2730_MODULE_EN		0x1808
+#define SC2730_CLK_EN			0x1810
+#define SC2730_WDT_BASE			0x40
+#define SC2721_RST_STATUS		0xed8
+#define SC2721_MODULE_EN		0xc08
+#define SC2721_CLK_EN			0xc10
+#define SC2721_WDG_BASE			0x40
+#define SC2720_RST_STATUS		0xe24
+#define SC2720_MODULE_EN		0xc08
+#define SC2720_CLK_EN			0xc10
+#define SC2720_WDG_BASE			0x40
+#define UMP9620_RST_STATUS		0x23ac
+#define UMP9620_MODULE_EN		0x2008
+#define UMP9620_CLK_EN			0x2010
+#define UMP9620_WDT_BASE		0x40
+#define UMP9620_SWRST_CTRL0             0x23f8
+#define UMP9620_SOFT_RST_HW             0x2024
+#define SC2730_SWRST_CTRL0              0x1bf8
+#define SC2730_SOFT_RST_HW              0x1824
+#define SC2721_SWRST_CTRL0              0xf1c
+#define SC2721_SOFT_RST_HW              0xc24
+#define SC2720_SWRST_CTRL0              0xe68
+#define SC2720_SOFT_RST_HW              0xc24
+#define REG_RST_EN                      BIT(4)
+#define REG_SOFT_RST                    BIT(0)
 
 /* Definition of PMIC reset status register */
 #define HWRST_STATUS_SECURITY		0x02
+#define HWRST_STATUS_SECBOOT		0x03
+#define HWRST_STATUS_BOOTLOADER_PANIC	0x10
 #define HWRST_STATUS_RECOVERY		0x20
 #define HWRST_STATUS_NORMAL		0x40
 #define HWRST_STATUS_ALARM		0x50
@@ -98,6 +137,7 @@
 #define HWRST_STATUS_AUTODLOADER	0xa0
 #define HWRST_STATUS_IQMODE		0xb0
 #define HWRST_STATUS_SPRDISK		0xc0
+#define HWRST_STATUS_SILENT             0xd0
 #define HWRST_STATUS_FACTORYTEST	0xe0
 #define HWRST_STATUS_WATCHDOG		0xf0
 
@@ -105,6 +145,21 @@
 #define WDG_LOAD_VAL			((50 * 32768) / 1000)
 #define WDG_LOAD_MASK			GENMASK(15, 0)
 #define WDG_UNLOCK_KEY			0xe551
+
+/*Adi single soft multi hard*/
+#define SPRD_ADI_MAGIC_LEN_MAX          5
+
+struct sprd_adi_variant_data {
+	int (*read_check)(u32 val, u32 reg_paddr);
+	int (*write_wait)(void __iomem *adi_base);
+	u32 channel_offset;
+	u32 wdg_base;
+	u32 rst_sts;
+	u32 wdg_en;
+	u32 wdg_clk;
+	u32 swrst_base;
+	u32 softrst_base;
+};
 
 struct sprd_adi {
 	struct spi_controller	*ctlr;
@@ -114,6 +169,7 @@ struct sprd_adi {
 	unsigned long		slave_vbase;
 	unsigned long		slave_pbase;
 	struct notifier_block	restart_handler;
+	const struct sprd_adi_variant_data *data;
 };
 
 static int sprd_adi_check_paddr(struct sprd_adi *sadi, u32 paddr)
@@ -160,11 +216,47 @@ static int sprd_adi_fifo_is_full(struct sprd_adi *sadi)
 	return readl_relaxed(sadi->base + REG_ADI_ARM_FIFO_STS) & BIT_FIFO_FULL;
 }
 
+static int sprd_adi_read_check(u32 val, u32 reg_paddr)
+{
+	u32 rd_addr;
+
+	rd_addr = (val & RD_ADDR_MASK) >> RD_ADDR_SHIFT;
+
+	if (rd_addr != (reg_paddr & REG_ADDR_LOW_MASK) >> RDBACK_ADDR_OFFSET) {
+		pr_err("ADI read error, reg addr = 0x%x, val = 0x%x\n",
+			reg_paddr, val);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int sprd_adi_write_wait(void __iomem *adi_base)
+{
+	int write_timeout = ADI_WRITE_TIMEOUT;
+	u32 val;
+
+	do {
+		val = readl_relaxed(adi_base + REG_ADI_ARM_FIFO_STS);
+		if (!(val & BIT_ARM_WR_FREQ))
+			break;
+
+		cpu_relax();
+	} while (--write_timeout);
+
+	if (write_timeout == 0) {
+		pr_err("ADI write fail\n");
+		return -EBUSY;
+	}
+
+	return 0;
+}
+
 static int sprd_adi_read(struct sprd_adi *sadi, u32 reg_paddr, u32 *read_val)
 {
 	int read_timeout = ADI_READ_TIMEOUT;
 	unsigned long flags;
-	u32 val, rd_addr;
+	u32 val;
 	int ret = 0;
 
 	if (sadi->hwlock) {
@@ -204,18 +296,15 @@ static int sprd_adi_read(struct sprd_adi *sadi, u32 reg_paddr, u32 *read_val)
 	}
 
 	/*
-	 * The return value includes data and read register address, from bit 0
-	 * to bit 15 are data, and from bit 16 to bit 30 are read register
-	 * address. Then we can check the returned register address to validate
-	 * data.
+	 * The return value before adi r5p0 includes data and read register
+	 * address, from bit 0to bit 15 are data, and from bit 16 to bit 30
+	 * are read register address. Then we can check the returned register
+	 * address to validate data.
 	 */
-	rd_addr = (val & RD_ADDR_MASK ) >> RD_ADDR_SHIFT;
-
-	if (rd_addr != (reg_paddr & REG_ADDR_LOW_MASK)) {
-		dev_err(sadi->dev, "read error, reg addr = 0x%x, val = 0x%x\n",
-			reg_paddr, val);
-		ret = -EIO;
-		goto out;
+	if (sadi->data->read_check) {
+		ret = sadi->data->read_check(val, reg_paddr);
+		if (ret < 0)
+			goto out;
 	}
 
 	*read_val = val & RD_VALUE_MASK;
@@ -263,7 +352,12 @@ static int sprd_adi_write(struct sprd_adi *sadi, u32 reg_paddr, u32 val)
 	if (timeout == 0) {
 		dev_err(sadi->dev, "write fifo is full\n");
 		ret = -EBUSY;
+		goto out;
 	}
+
+	/* we should wait success flag when write for adi r5px */
+	if (sadi->data->write_wait)
+		ret = sadi->data->write_wait(sadi->base);
 
 out:
 	if (sadi->hwlock)
@@ -318,13 +412,13 @@ static int sprd_adi_transfer_one(struct spi_controller *ctlr,
 
 static void sprd_adi_set_wdt_rst_mode(struct sprd_adi *sadi)
 {
-#ifdef CONFIG_SPRD_WATCHDOG
-	u32 val;
+#if IS_ENABLED(CONFIG_SPRD_WATCHDOG) || IS_ENABLED(CONFIG_SPRD_WATCHDOG_FIQ)
+	u32 val = 0;
 
-	/* Set default watchdog reboot mode */
-	sprd_adi_read(sadi, sadi->slave_pbase + PMIC_RST_STATUS, &val);
+	/* Init watchdog reset mode */
+	sprd_adi_read(sadi, sadi->slave_pbase + sadi->data->rst_sts, &val);
 	val |= HWRST_STATUS_WATCHDOG;
-	sprd_adi_write(sadi, sadi->slave_pbase + PMIC_RST_STATUS, val);
+	sprd_adi_write(sadi, sadi->slave_pbase + sadi->data->rst_sts, val);
 #endif
 }
 
@@ -333,7 +427,7 @@ static int sprd_adi_restart_handler(struct notifier_block *this,
 {
 	struct sprd_adi *sadi = container_of(this, struct sprd_adi,
 					     restart_handler);
-	u32 val, reboot_mode = 0;
+	u32 val = 0, reboot_mode = 0;
 
 	if (!cmd)
 		reboot_mode = HWRST_STATUS_NORMAL;
@@ -359,47 +453,63 @@ static int sprd_adi_restart_handler(struct notifier_block *this,
 		reboot_mode = HWRST_STATUS_SPRDISK;
 	else if (!strncmp(cmd, "tospanic", 8))
 		reboot_mode = HWRST_STATUS_SECURITY;
+	else if (!strncmp(cmd, "dm-verity", 9))
+		reboot_mode = HWRST_STATUS_SECBOOT;
 	else if (!strncmp(cmd, "factorytest", 11))
 		reboot_mode = HWRST_STATUS_FACTORYTEST;
+	else if (!strncmp(cmd, "silent", 6))
+		reboot_mode = HWRST_STATUS_SILENT;
 	else
 		reboot_mode = HWRST_STATUS_NORMAL;
 
 	/* Record the reboot mode */
-	sprd_adi_read(sadi, sadi->slave_pbase + PMIC_RST_STATUS, &val);
-	val &= ~HWRST_STATUS_WATCHDOG;
+	sprd_adi_read(sadi, sadi->slave_pbase + sadi->data->rst_sts, &val);
+	val &= ~0xFF;
 	val |= reboot_mode;
-	sprd_adi_write(sadi, sadi->slave_pbase + PMIC_RST_STATUS, val);
+	sprd_adi_write(sadi, sadi->slave_pbase + sadi->data->rst_sts, val);
 
-	/* Enable the interface clock of the watchdog */
-	sprd_adi_read(sadi, sadi->slave_pbase + PMIC_MODULE_EN, &val);
-	val |= BIT_WDG_EN;
-	sprd_adi_write(sadi, sadi->slave_pbase + PMIC_MODULE_EN, val);
+	/*enable register reboot mode*/
+	sprd_adi_read(sadi, sadi->slave_pbase + sadi->data->swrst_base, &val);
+	val |= REG_RST_EN;
+	sprd_adi_write(sadi, sadi->slave_pbase + sadi->data->swrst_base, val);
 
-	/* Enable the work clock of the watchdog */
-	sprd_adi_read(sadi, sadi->slave_pbase + PMIC_CLK_EN, &val);
-	val |= BIT_WDG_EN;
-	sprd_adi_write(sadi, sadi->slave_pbase + PMIC_CLK_EN, val);
-
-	/* Unlock the watchdog */
-	sprd_adi_write(sadi, sadi->slave_pbase + REG_WDG_LOCK, WDG_UNLOCK_KEY);
-
-	/* Load the watchdog timeout value, 50ms is always enough. */
-	sprd_adi_write(sadi, sadi->slave_pbase + REG_WDG_LOAD_HIGH, 0);
-	sprd_adi_write(sadi, sadi->slave_pbase + REG_WDG_LOAD_LOW,
-		       WDG_LOAD_VAL & WDG_LOAD_MASK);
-
-	/* Start the watchdog to reset system */
-	sprd_adi_read(sadi, sadi->slave_pbase + REG_WDG_CTRL, &val);
-	val |= BIT_WDG_RUN | BIT_WDG_RST;
-	sprd_adi_write(sadi, sadi->slave_pbase + REG_WDG_CTRL, val);
-
-	/* Lock the watchdog */
-	sprd_adi_write(sadi, sadi->slave_pbase + REG_WDG_LOCK, ~WDG_UNLOCK_KEY);
+	/*enable soft reboot mode */
+	sprd_adi_read(sadi, sadi->slave_pbase + sadi->data->softrst_base, &val);
+	val |= REG_SOFT_RST;
+	sprd_adi_write(sadi, sadi->slave_pbase + sadi->data->softrst_base, val);
 
 	mdelay(1000);
 
 	dev_emerg(sadi->dev, "Unable to restart system\n");
 	return NOTIFY_DONE;
+}
+
+static void sprd_adi_power_ssmh(char *adi_supply)
+{
+	struct device_node *cmdline_node;
+	const char *cmd_line, *adi_type;
+	char adi_value[SPRD_ADI_MAGIC_LEN_MAX] = "";
+	int ret;
+
+	cmdline_node = of_find_node_by_path("/chosen");
+	ret = of_property_read_string(cmdline_node, "bootargs", &cmd_line);
+
+	if (ret) {
+		pr_err("can't parse bootargs property\n");
+		return;
+	}
+
+	adi_type = strstr(cmd_line, "power.from.extern=");
+	if (!adi_type) {
+		pr_err("can't find power.from.extern\n");
+		return;
+	}
+
+	sscanf(adi_type, "power.from.extern=%s\n", adi_value);
+	if (!adi_value[0])
+		return;
+
+	strcat(adi_supply, adi_value);
 }
 
 static void sprd_adi_hw_init(struct sprd_adi *sadi)
@@ -408,6 +518,7 @@ static void sprd_adi_hw_init(struct sprd_adi *sadi)
 	int i, size, chn_cnt;
 	const __be32 *list;
 	u32 tmp;
+	char adi_supply[25] = "sprd,hw-channels";
 
 	/* Set all channels as default priority */
 	writel_relaxed(0, sadi->base + REG_ADI_CHN_PRIL);
@@ -419,7 +530,10 @@ static void sprd_adi_hw_init(struct sprd_adi *sadi)
 	writel_relaxed(tmp, sadi->base + REG_ADI_GSSI_CFG0);
 
 	/* Set hardware channels setting */
-	list = of_get_property(np, "sprd,hw-channels", &size);
+	sprd_adi_power_ssmh(adi_supply);
+	dev_info(sadi->dev, "adi supply is %s\n", adi_supply);
+
+	list = of_get_property(np, adi_supply, &size);
 	if (!list || !size) {
 		dev_info(sadi->dev, "no hw channels setting in node\n");
 		return;
@@ -453,10 +567,11 @@ static void sprd_adi_hw_init(struct sprd_adi *sadi)
 static int sprd_adi_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
+	const struct sprd_adi_variant_data *data;
 	struct spi_controller *ctlr;
 	struct sprd_adi *sadi;
 	struct resource *res;
-	u32 num_chipselect;
+	u16 num_chipselect;
 	int ret;
 
 	if (!np) {
@@ -464,8 +579,14 @@ static int sprd_adi_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
+	data = of_device_get_match_data(&pdev->dev);
+	if (!data) {
+		dev_err(&pdev->dev, "no matching driver data found\n");
+		return -EINVAL;
+	}
+
 	pdev->id = of_alias_get_id(np, "spi");
-	num_chipselect = of_get_child_count(np);
+	num_chipselect = (__force u16)of_get_child_count(np);
 
 	ctlr = spi_alloc_master(&pdev->dev, sizeof(struct sprd_adi));
 	if (!ctlr)
@@ -481,10 +602,12 @@ static int sprd_adi_probe(struct platform_device *pdev)
 		goto put_ctlr;
 	}
 
-	sadi->slave_vbase = (unsigned long)sadi->base + ADI_SLAVE_OFFSET;
-	sadi->slave_pbase = res->start + ADI_SLAVE_OFFSET;
+	sadi->slave_vbase = (__force unsigned long)sadi->base +
+			    data->channel_offset;
+	sadi->slave_pbase = res->start + data->channel_offset;
 	sadi->ctlr = ctlr;
 	sadi->dev = &pdev->dev;
+	sadi->data = data;
 	ret = of_hwspin_lock_get_id(np, 0);
 	if (ret > 0 || (IS_ENABLED(CONFIG_HWSPINLOCK) && ret == 0)) {
 		sadi->hwlock =
@@ -524,7 +647,7 @@ static int sprd_adi_probe(struct platform_device *pdev)
 	}
 
 	sadi->restart_handler.notifier_call = sprd_adi_restart_handler;
-	sadi->restart_handler.priority = 128;
+	sadi->restart_handler.priority = 130;
 	ret = register_restart_handler(&sadi->restart_handler);
 	if (ret) {
 		dev_err(&pdev->dev, "can not register restart handler\n");
@@ -547,9 +670,79 @@ static int sprd_adi_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static struct sprd_adi_variant_data sc9860_data = {
+	.read_check = sprd_adi_read_check,
+	.channel_offset = ADI_CHANNEL_OFFSET,
+	.wdg_base = PMIC_WDG_BASE,
+	.rst_sts = PMIC_RST_STATUS,
+	.wdg_en = PMIC_MODULE_EN,
+	.wdg_clk = PMIC_CLK_EN,
+};
+
+static struct sprd_adi_variant_data sharkl3_data = {
+	.read_check = sprd_adi_read_check,
+	.channel_offset = ADI_CHANNEL_OFFSET,
+	.wdg_base = SC2721_WDG_BASE,
+	.rst_sts = SC2721_RST_STATUS,
+	.wdg_en = SC2721_MODULE_EN,
+	.wdg_clk = SC2721_CLK_EN,
+	.swrst_base = SC2721_SWRST_CTRL0,
+	.softrst_base = SC2721_SOFT_RST_HW,
+};
+
+static struct sprd_adi_variant_data pike2_data = {
+	.read_check = sprd_adi_read_check,
+	.channel_offset = ADI_CHANNEL_OFFSET,
+	.wdg_base = SC2720_WDG_BASE,
+	.rst_sts = SC2720_RST_STATUS,
+	.wdg_en = SC2720_MODULE_EN,
+	.wdg_clk = SC2720_CLK_EN,
+	.swrst_base = SC2720_SWRST_CTRL0,
+	.softrst_base = SC2720_SOFT_RST_HW,
+};
+
+static struct sprd_adi_variant_data sharkl5pro_data = {
+	.read_check = sprd_adi_read_check,
+	.channel_offset = ADI_15BIT_CHANNEL_OFFSET,
+	.wdg_base = SC2730_WDT_BASE,
+	.rst_sts = SC2730_RST_STATUS,
+	.wdg_en = SC2730_MODULE_EN,
+	.wdg_clk = SC2730_CLK_EN,
+	.swrst_base = SC2730_SWRST_CTRL0,
+	.softrst_base = SC2730_SOFT_RST_HW,
+};
+
+static struct sprd_adi_variant_data qogirn6pro_data = {
+	.write_wait = sprd_adi_write_wait,
+	.channel_offset = ADI_15BIT_CHANNEL_OFFSET,
+	.wdg_base = UMP9620_WDT_BASE,
+	.rst_sts = UMP9620_RST_STATUS,
+	.wdg_en = UMP9620_MODULE_EN,
+	.wdg_clk = UMP9620_CLK_EN,
+	.swrst_base = UMP9620_SWRST_CTRL0,
+	.softrst_base = UMP9620_SOFT_RST_HW,
+};
+
 static const struct of_device_id sprd_adi_of_match[] = {
 	{
 		.compatible = "sprd,sc9860-adi",
+		.data = &sc9860_data,
+	},
+	{
+		.compatible = "sprd,sharkl3-adi",
+		.data = &sharkl3_data,
+	},
+	{
+		.compatible = "sprd,pike2-adi",
+		.data = &pike2_data,
+	},
+	{
+		.compatible = "sprd,sharkl5pro-adi",
+		.data = &sharkl5pro_data,
+	},
+	{
+		.compatible = "sprd,qogirn6pro-adi",
+		.data = &qogirn6pro_data,
 	},
 	{ },
 };

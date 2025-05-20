@@ -20,8 +20,11 @@
 #include <linux/percpu.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
+#include <trace/hooks/topology.h>
 
 DEFINE_PER_CPU(unsigned long, freq_scale) = SCHED_CAPACITY_SCALE;
+DEFINE_PER_CPU(unsigned long, max_cpu_freq);
+DEFINE_PER_CPU(unsigned long, max_freq_scale) = SCHED_CAPACITY_SCALE;
 
 void arch_set_freq_scale(struct cpumask *cpus, unsigned long cur_freq,
 			 unsigned long max_freq)
@@ -31,11 +34,37 @@ void arch_set_freq_scale(struct cpumask *cpus, unsigned long cur_freq,
 
 	scale = (cur_freq << SCHED_CAPACITY_SHIFT) / max_freq;
 
-	for_each_cpu(i, cpus)
+	trace_android_vh_arch_set_freq_scale(cpus, cur_freq, max_freq, &scale);
+
+	for_each_cpu(i, cpus) {
 		per_cpu(freq_scale, i) = scale;
+		per_cpu(max_cpu_freq, i) = max_freq;
+	}
+}
+
+void arch_set_max_freq_scale(struct cpumask *cpus,
+			     unsigned long policy_max_freq)
+{
+	unsigned long scale, max_freq;
+	int cpu = cpumask_first(cpus);
+
+	if (cpu > nr_cpu_ids)
+		return;
+
+	max_freq = per_cpu(max_cpu_freq, cpu);
+	if (!max_freq)
+		return;
+
+	scale = (policy_max_freq << SCHED_CAPACITY_SHIFT) / max_freq;
+
+	trace_android_vh_arch_set_freq_scale(cpus, policy_max_freq, max_freq, &scale);
+
+	for_each_cpu(cpu, cpus)
+		per_cpu(max_freq_scale, cpu) = scale;
 }
 
 DEFINE_PER_CPU(unsigned long, cpu_scale) = SCHED_CAPACITY_SCALE;
+EXPORT_PER_CPU_SYMBOL_GPL(cpu_scale);
 
 void topology_set_cpu_scale(unsigned int cpu, unsigned long capacity)
 {
@@ -247,7 +276,7 @@ static void parsing_done_workfn(struct work_struct *work)
 core_initcall(free_raw_capacity);
 #endif
 
-#if defined(CONFIG_ARM64) || defined(CONFIG_RISCV)
+#if defined(CONFIG_ARM) || defined(CONFIG_ARM64) || defined(CONFIG_RISCV)
 static int __init get_cpu_for_node(struct device_node *node)
 {
 	struct device_node *cpu_node;
@@ -383,7 +412,7 @@ static int __init parse_cluster(struct device_node *cluster, int depth)
 	return 0;
 }
 
-static int __init parse_dt_topology(void)
+int __init parse_dt_topology(void)
 {
 	struct device_node *cn, *map;
 	int ret = 0;

@@ -42,6 +42,8 @@
 #include <linux/kthread.h>
 #include <linux/init.h>
 #include <linux/mmu_notifier.h>
+#include <linux/page_owner.h>
+#include <linux/memblock.h>
 
 #include <asm/tlb.h>
 #include "internal.h"
@@ -449,6 +451,60 @@ static void dump_oom_summary(struct oom_control *oc, struct task_struct *victim)
 		from_kuid(&init_user_ns, task_uid(victim)));
 }
 
+#ifdef CONFIG_SPRD_PAGE_OWNER
+static void sprd_show_page_owner(void)
+{
+	unsigned long pfn;
+	struct page *page;
+	pfn = min_low_pfn;
+
+	/* Find a valid PFN or the start of a MAX_ORDER_NR_PAGES area */
+	while (!pfn_valid(pfn) && (pfn & (MAX_ORDER_NR_PAGES - 1)) != 0)
+		pfn++;
+
+	for (; pfn < max_pfn; pfn++) {
+		/*
+		 * If the new page is in a new MAX_ORDER_NR_PAGES area,
+		 * validate the area as existing, skip it if not
+		 */
+		if ((pfn & (MAX_ORDER_NR_PAGES - 1)) == 0 && !pfn_valid(pfn)) {
+			pfn += MAX_ORDER_NR_PAGES - 1;
+			continue;
+		}
+
+		/* Check for holes within a MAX_ORDER area */
+		if (!pfn_valid_within(pfn))
+			continue;
+
+		page = pfn_to_online_page(pfn);
+
+		/* skip reserved page */
+		if (PageReserved(page))
+			continue;
+
+		/* skip page in LRU */
+		if (PageLRU(page))
+			continue;
+
+		/* skip compound and higher-order page */
+		if (PageCompound(page)) {
+			pfn += compound_nr(page);
+			continue;
+		}
+
+		/* skip order0 slab page */
+		if (PageSlab(page))
+			continue;
+
+		/* skip zspage/vmalloc/privatte page */
+		if (PagePrivate(page))
+			continue;
+
+		__dump_page_owner(page);
+	}
+}
+#endif
+
 static void dump_header(struct oom_control *oc, struct task_struct *p)
 {
 	pr_warn("%s invoked oom-killer: gfp_mask=%#x(%pGg), order=%d, oom_score_adj=%hd\n",
@@ -469,6 +525,14 @@ static void dump_header(struct oom_control *oc, struct task_struct *p)
 		dump_tasks(oc);
 	if (p)
 		dump_oom_summary(oc, p);
+#ifdef CONFIG_E_SHOW_MEM
+	enhanced_show_mem();
+#endif
+
+#ifdef CONFIG_SPRD_PAGE_OWNER
+	if (current->signal->oom_score_adj < 0)
+		sprd_show_page_owner();
+#endif
 }
 
 /*
@@ -631,7 +695,7 @@ done:
 	 */
 	set_bit(MMF_OOM_SKIP, &mm->flags);
 
-	/* Drop a reference taken by queue_oom_reaper */
+	/* Drop a reference taken by wake_oom_reaper */
 	put_task_struct(tsk);
 }
 
@@ -641,12 +705,12 @@ static int oom_reaper(void *unused)
 		struct task_struct *tsk = NULL;
 
 		wait_event_freezable(oom_reaper_wait, oom_reaper_list != NULL);
-		spin_lock_irq(&oom_reaper_lock);
+		spin_lock(&oom_reaper_lock);
 		if (oom_reaper_list != NULL) {
 			tsk = oom_reaper_list;
 			oom_reaper_list = tsk->oom_reaper_list;
 		}
-		spin_unlock_irq(&oom_reaper_lock);
+		spin_unlock(&oom_reaper_lock);
 
 		if (tsk)
 			oom_reap_task(tsk);
@@ -655,46 +719,20 @@ static int oom_reaper(void *unused)
 	return 0;
 }
 
-static void wake_oom_reaper(struct timer_list *timer)
-{
-	struct task_struct *tsk = container_of(timer, struct task_struct,
-			oom_reaper_timer);
-	struct mm_struct *mm = tsk->signal->oom_mm;
-	unsigned long flags;
-
-	/* The victim managed to terminate on its own - see exit_mmap */
-	if (test_bit(MMF_OOM_SKIP, &mm->flags)) {
-		put_task_struct(tsk);
-		return;
-	}
-
-	spin_lock_irqsave(&oom_reaper_lock, flags);
-	tsk->oom_reaper_list = oom_reaper_list;
-	oom_reaper_list = tsk;
-	spin_unlock_irqrestore(&oom_reaper_lock, flags);
-	trace_wake_reaper(tsk->pid);
-	wake_up(&oom_reaper_wait);
-}
-
-/*
- * Give the OOM victim time to exit naturally before invoking the oom_reaping.
- * The timers timeout is arbitrary... the longer it is, the longer the worst
- * case scenario for the OOM can take. If it is too small, the oom_reaper can
- * get in the way and release resources needed by the process exit path.
- * e.g. The futex robust list can sit in Anon|Private memory that gets reaped
- * before the exit path is able to wake the futex waiters.
- */
-#define OOM_REAPER_DELAY (2*HZ)
-static void queue_oom_reaper(struct task_struct *tsk)
+static void wake_oom_reaper(struct task_struct *tsk)
 {
 	/* mm is already queued? */
 	if (test_and_set_bit(MMF_OOM_REAP_QUEUED, &tsk->signal->oom_mm->flags))
 		return;
 
 	get_task_struct(tsk);
-	timer_setup(&tsk->oom_reaper_timer, wake_oom_reaper, 0);
-	tsk->oom_reaper_timer.expires = jiffies + OOM_REAPER_DELAY;
-	add_timer(&tsk->oom_reaper_timer);
+
+	spin_lock(&oom_reaper_lock);
+	tsk->oom_reaper_list = oom_reaper_list;
+	oom_reaper_list = tsk;
+	spin_unlock(&oom_reaper_lock);
+	trace_wake_reaper(tsk->pid);
+	wake_up(&oom_reaper_wait);
 }
 
 static int __init oom_init(void)
@@ -704,7 +742,7 @@ static int __init oom_init(void)
 }
 subsys_initcall(oom_init)
 #else
-static inline void queue_oom_reaper(struct task_struct *tsk)
+static inline void wake_oom_reaper(struct task_struct *tsk)
 {
 }
 #endif /* CONFIG_MMU */
@@ -953,7 +991,7 @@ static void __oom_kill_process(struct task_struct *victim, const char *message)
 	rcu_read_unlock();
 
 	if (can_oom_reap)
-		queue_oom_reaper(victim);
+		wake_oom_reaper(victim);
 
 	mmdrop(mm);
 	put_task_struct(victim);
@@ -989,7 +1027,7 @@ static void oom_kill_process(struct oom_control *oc, const char *message)
 	task_lock(victim);
 	if (task_will_free_mem(victim)) {
 		mark_oom_victim(victim);
-		queue_oom_reaper(victim);
+		wake_oom_reaper(victim);
 		task_unlock(victim);
 		put_task_struct(victim);
 		return;
@@ -1087,7 +1125,7 @@ bool out_of_memory(struct oom_control *oc)
 	 */
 	if (task_will_free_mem(current)) {
 		mark_oom_victim(current);
-		queue_oom_reaper(current);
+		wake_oom_reaper(current);
 		return true;
 	}
 

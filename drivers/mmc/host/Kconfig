@@ -489,6 +489,8 @@ config MMC_SDHCI_MSM
 	depends on ARCH_QCOM || (ARM && COMPILE_TEST)
 	depends on MMC_SDHCI_PLTFM
 	select MMC_SDHCI_IO_ACCESSORS
+	select MMC_CQHCI
+	select QCOM_SCM if MMC_CRYPTO && ARCH_QCOM
 	help
 	  This selects the Secure Digital Host Controller Interface (SDHCI)
 	  support present in Qualcomm SOCs. The controller supports
@@ -632,12 +634,32 @@ config MMC_SDHCI_SPRD
 	depends on ARCH_SPRD
 	depends on MMC_SDHCI_PLTFM
 	select MMC_SDHCI_IO_ACCESSORS
+	select MMC_HSQ
 	help
 	  This selects the SDIO Host Controller in Spreadtrum
 	  SoCs, this driver supports R11(IP version: R11P0).
 
 	  If you have a controller with this interface, say Y or M here.
 
+	  If unsure, say N.
+
+config MMC_SPRD_SDHCR11P3
+	tristate "Spreadtrum SDIO host Controller(IP version:R11P3) support"
+	depends on ARCH_SPRD
+	default n
+	help
+	  This selects the SDIO Host Controller(IP version(R11P3)) in spreadtrum platform.
+	  If you have a controller with this interface, say Y or M here.
+
+	  If unsure, say N.
+
+config MMC_SWCQ
+	tristate "SPRD eMMC Soft Command Queuing support"
+	default n
+	help
+	  This enables eMMC software Command Queuing support by Spreadtrum.
+	  Say Y if you want to
+	  use eMMC Command Queuing scheme.
 	  If unsure, say N.
 
 config MMC_TMIO_CORE
@@ -933,6 +955,17 @@ config MMC_CQHCI
 	  This controller supports eMMC devices with command queue support.
 
 	  If you have a controller with this interface, say Y or M here.
+
+	  If unsure, say N.
+
+config MMC_HSQ
+	tristate "MMC Host Software Queue support"
+	help
+	  This selects the MMC Host Software Queue support. This may increase
+	  performance, if the host controller and its driver supports it.
+
+	  If you have a controller/driver supporting this interface, say Y or M
+	  here.
 
 	  If unsure, say N.
 

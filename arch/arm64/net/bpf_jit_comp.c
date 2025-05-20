@@ -903,7 +903,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.prog = prog;
 
-	ctx.offset = kcalloc(prog->len + 1, sizeof(int), GFP_KERNEL);
+	ctx.offset = kvcalloc(prog->len + 1, sizeof(int), GFP_KERNEL);
 	if (ctx.offset == NULL) {
 		prog = orig_prog;
 		goto out_off;
@@ -994,7 +994,7 @@ skip_init_ctx:
 			ctx.offset[i] *= AARCH64_INSN_SIZE;
 		bpf_prog_fill_jited_linfo(prog, ctx.offset + 1);
 out_off:
-		kfree(ctx.offset);
+		kvfree(ctx.offset);
 		kfree(jit_data);
 		prog->aux->jit_data = NULL;
 	}
@@ -1022,3 +1022,14 @@ void bpf_jit_free_exec(void *addr)
 {
 	return vfree(addr);
 }
+
+#ifdef CONFIG_CFI_CLANG
+bool arch_bpf_jit_check_func(const struct bpf_prog *prog)
+{
+	const uintptr_t func = (const uintptr_t)prog->bpf_func;
+
+	/* bpf_func must be correctly aligned and within the BPF JIT region */
+	return (func >= BPF_JIT_REGION_START && func < BPF_JIT_REGION_END &&
+		IS_ALIGNED(func, sizeof(u32)));
+}
+#endif

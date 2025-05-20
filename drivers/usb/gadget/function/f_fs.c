@@ -964,6 +964,10 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 		if (file->f_flags & O_NONBLOCK)
 			return -EAGAIN;
 
+		if ((!io_data->read) && (!strcmp(epfile->ffs->dev_name, "mtp")
+				|| !strcmp(epfile->ffs->dev_name, "ptp")))
+			return -ENODEV;
+
 		ret = wait_event_interruptible(
 				epfile->ffs->wait, (ep = epfile->ep));
 		if (ret)
@@ -1018,7 +1022,15 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 		if (io_data->read)
 			data_len = usb_ep_align_maybe(gadget, ep->ep, data_len);
 
+#if IS_ENABLED(CONFIG_USB_DWC3_SPRD)
+		if (!strcmp(epfile->ffs->dev_name, "mtp")
+					|| !strcmp(epfile->ffs->dev_name, "ptp"))
+			io_data->use_sg = false;
+		else
+			io_data->use_sg = gadget->sg_supported && data_len > PAGE_SIZE;
+#else
 		io_data->use_sg = gadget->sg_supported && data_len > PAGE_SIZE;
+#endif
 		spin_unlock_irq(&epfile->ffs->eps_lock);
 
 		data = ffs_alloc_buffer(io_data, data_len);

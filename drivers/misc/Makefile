@@ -57,3 +57,10 @@ obj-y				+= cardreader/
 obj-$(CONFIG_PVPANIC)   	+= pvpanic.o
 obj-$(CONFIG_HABANA_AI)		+= habanalabs/
 obj-$(CONFIG_XILINX_SDFEC)	+= xilinx_sdfec.o
+obj-$(CONFIG_UID_SYS_STATS)	+= uid_sys_stats.o
+obj-$(CONFIG_SPRD_UID)		+= misc_sprd_uid.o
+misc_sprd_uid-y		:= sprd_uid.o
+obj-$(CONFIG_HISI_HIKEY_USB)	+= hisi_hikey_usb.o
+obj-$(CONFIG_SPRD_SOCID)	+= sprd_soc_id.o
+obj-$(CONFIG_LEDS_SC27XX_VIBRA)	+= vibrator/
+

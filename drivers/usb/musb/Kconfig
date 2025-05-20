@@ -116,8 +116,22 @@ config USB_MUSB_JZ4740
 	depends on USB_MUSB_GADGET
 	depends on USB=n || USB_OTG_BLACKLIST_HUB
 
+config USB_MUSB_MEDIATEK
+	tristate "MediaTek platforms"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on NOP_USB_XCEIV
+	select GENERIC_PHY
+	select USB_ROLE_SWITCH
+
 config USB_MUSB_AM335X_CHILD
 	tristate
+
+config USB_MUSB_SPRD
+	tristate 'SPRD platforms'
+	help
+	  Enable this to support the SPRD MUSB that is part of gadget. This driver
+	  takes care of all the usb driver functionality, normally paired with
+	  DesignWare MUSB20 (DRD) Controller.
 
 comment "MUSB DMA mode"
 
@@ -134,6 +148,30 @@ config MUSB_PIO_ONLY
 
 if !MUSB_PIO_ONLY
 
+config USB_SPRD_DMA
+	tristate 'USE DMA MODE SPRD'
+	depends on USB_MUSB_SPRD
+	help
+	  Enable this to support the SPRD USB DMA mode that is part of gadget. This driver
+	  takes care of all the usb driver functionality, normally paired with
+	  DesignWare MUSB20 (DRD) Controller.
+
+config USB_SPRD_DMA_V3
+	bool 'DMA VERSION V3'
+	depends on USB_SPRD_DMA
+	help
+	  Enable this to support the SPRD USB DMA mode V3 version that is part of gadget.
+	  Because of usb dma hardware upgrading,software need to add this macro,used for
+	  compatibility with old dma version.
+
+config USB_SPRD_OFFLOAD
+	bool 'USB OFFLOAD MODE'
+	depends on USB_SPRD_DMA
+	help
+	  Enable this to support the SPRD USB OFFLOAD that hardware transport data using IIS
+	  interface automatically within host audio mode. Software need to add this macro to
+	  enable offload function.
+
 config USB_UX500_DMA
 	bool 'ST Ericsson Ux500'
 	depends on USB_MUSB_UX500
@@ -142,7 +180,7 @@ config USB_UX500_DMA
 
 config USB_INVENTRA_DMA
 	bool 'Inventra'
-	depends on USB_MUSB_OMAP2PLUS
+	depends on USB_MUSB_OMAP2PLUS || USB_MUSB_MEDIATEK
 	help
 	  Enable DMA transfers using Mentor's engine.
 

@@ -1,0 +1,14 @@
+#include "lcd_ili9883a_hl_mipi.dtsi"
+#include "lcd_ili9883a_txd_mipi.dtsi"
+#include "lcd_nv3051f_mipi.dtsi"
+#include "lcd_icnl9916_mipi.dtsi"
+
+&panel {
+	sprd,backlight = <&pwm_backlight>;
+	/delete-property/ sprd,surface-width;
+	/delete-property/ sprd,surface-height;
+
+	avdd-gpio = <&ap_gpio 60 GPIO_ACTIVE_HIGH>;
+	avee-gpio = <&ap_gpio 61 GPIO_ACTIVE_HIGH>;
+	reset-gpio = <&ap_gpio 50 GPIO_ACTIVE_HIGH>;
+};

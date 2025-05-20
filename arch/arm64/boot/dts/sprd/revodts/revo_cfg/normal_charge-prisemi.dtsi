@@ -1,0 +1,23 @@
+&charger_manager {
+	cm-chargers = "psc2965_charger";
+	extcon = <&pmic_typec>;
+};
+
+&aon_i2c0 {
+	status = "okay";
+	clock-frequency = <100000>;
+	
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	psc2965_chg: charger@6b {
+		compatible = "psc2965_chg";
+		reg = <0x6b>;
+		phys = <&hsphy>;
+		monitored-battery = <&bat>;
+		extcon = <&extcon_gpio>;
+		vddvbus:otg-vbus {
+			regulator-name = "vddvbus";
+		};
+	};
+};

@@ -36,8 +36,7 @@ void tmc_wait_for_tmcready(struct tmc_drvdata *drvdata)
 	/* Ensure formatter, unformatter and hardware fifo are empty */
 	if (coresight_timeout(drvdata->base,
 			      TMC_STS, TMC_STS_TMCREADY_BIT, 1)) {
-		dev_err(&drvdata->csdev->dev,
-			"timeout while waiting for TMC to be Ready\n");
+		pr_err("timeout while waiting for TMC to be Ready\n");
 	}
 }
 
@@ -53,8 +52,7 @@ void tmc_flush_and_stop(struct tmc_drvdata *drvdata)
 	/* Ensure flush completes */
 	if (coresight_timeout(drvdata->base,
 			      TMC_FFCR, TMC_FFCR_FLUSHMAN_BIT, 0)) {
-		dev_err(&drvdata->csdev->dev,
-		"timeout while waiting for completion of Manual Flush\n");
+		pr_err("timeout while waiting for completion of Manual Flush\n");
 	}
 
 	tmc_wait_for_tmcready(drvdata);
@@ -361,7 +359,7 @@ static const struct attribute_group coresight_tmc_mgmt_group = {
 	.name = "mgmt",
 };
 
-const struct attribute_group *coresight_tmc_groups[] = {
+static const struct attribute_group *coresight_tmc_groups[] = {
 	&coresight_tmc_group,
 	&coresight_tmc_mgmt_group,
 	NULL,
@@ -431,6 +429,39 @@ static u32 tmc_etr_get_default_buffer_size(struct device *dev)
 	return size;
 }
 
+int tmc_enable_sink_show(struct device *dev)
+{
+	int val;
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev);
+
+	pr_info("%s entry\n", __func__);
+
+	if (!drvdata)
+		return 0;
+
+	val = coresight_enable_sink_show_export(drvdata->csdev);
+
+	return val;
+}
+
+int tmc_enable_sink_store(struct device *dev, int val)
+{
+	int ret;
+	struct tmc_drvdata *drvdata = dev_get_drvdata(dev);
+
+	pr_info("%s entry\n", __func__);
+
+	if (!drvdata)
+		return -1;
+
+	if (val)
+		ret = coresight_enable_sink_store_export(drvdata->csdev, true);
+	else
+		ret = coresight_enable_sink_store_export(drvdata->csdev, false);
+
+	return ret;
+}
+
 static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 {
 	int ret = 0;
@@ -442,6 +473,10 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 	struct resource *res = &adev->res;
 	struct coresight_desc desc = { 0 };
 	struct coresight_dev_list *dev_list = NULL;
+	const char *tmc_name;
+
+	/* Use device name as sysfs handle */
+	tmc_name = dev_name(dev);
 
 	ret = -ENOMEM;
 	drvdata = devm_kzalloc(dev, sizeof(*drvdata), GFP_KERNEL);
@@ -526,7 +561,18 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 		goto out;
 	}
 
-	drvdata->miscdev.name = desc.name;
+#ifndef CONFIG_CORESIGHT_TMC_GROUP
+	/* fix etb dev name as "/dev/tmc_etb" for modem */
+	if (strnstr(tmc_name, "etb", strlen(tmc_name))) {
+		drvdata->miscdev.name = "tmc_etb";
+	} else
+#endif
+	{
+		snprintf(drvdata->etf_name, sizeof(drvdata->etf_name), "etf-%8lx",
+			(unsigned long)res->start);
+		drvdata->miscdev.name = drvdata->etf_name;
+	}
+
 	drvdata->miscdev.minor = MISC_DYNAMIC_MINOR;
 	drvdata->miscdev.fops = &tmc_fops;
 	ret = misc_register(&drvdata->miscdev);

@@ -1397,6 +1397,7 @@ struct sighand_struct *__lock_task_sighand(struct task_struct *tsk,
 
 	return sighand;
 }
+EXPORT_SYMBOL_GPL(__lock_task_sighand);
 
 /*
  * send signal info to all the members of a group
@@ -2716,6 +2717,11 @@ relock:
 		if (sig_kernel_coredump(signr)) {
 			if (print_fatal_signals)
 				print_fatal_signal(ksig->info.si_signo);
+
+#ifdef CONFIG_SHOW_UREGS_WITH_PHYSICAL
+			show_uregs_with_physical(signal_pt_regs());
+#endif
+
 			proc_coredump_connector(current);
 			/*
 			 * If it was able to dump core, this kills all

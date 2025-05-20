@@ -125,11 +125,14 @@ struct sprd_uart_dma {
 struct sprd_uart_port {
 	struct uart_port port;
 	char name[16];
-	struct clk *clk;
 	struct sprd_uart_dma tx_dma;
 	struct sprd_uart_dma rx_dma;
 	dma_addr_t pos;
 	unsigned char *rx_buf_tail;
+	struct clk *clk;
+	unsigned int is_console;
+	unsigned int cflag_old;
+
 };
 
 static struct sprd_uart_port *sprd_port[UART_NR_MAX];
@@ -145,7 +148,7 @@ static inline unsigned int serial_in(struct uart_port *port,
 }
 
 static inline void serial_out(struct uart_port *port, unsigned int offset,
-			      int value)
+			      unsigned int value)
 {
 	writel_relaxed(value, port->membase + offset);
 }
@@ -740,14 +743,14 @@ static int sprd_startup(struct uart_port *port)
 
 	/* allocate irq */
 	sp = container_of(port, struct sprd_uart_port, port);
-	snprintf(sp->name, sizeof(sp->name), "sprd_serial%d", port->line);
+	snprintf(sp->name, sizeof(sp->name), "sprd_serial%u", port->line);
 
 	sprd_uart_dma_startup(port, sp);
 
 	ret = devm_request_irq(port->dev, port->irq, sprd_handle_irq,
 			       IRQF_SHARED, sp->name, port);
 	if (ret) {
-		dev_err(port->dev, "fail to request serial irq %d, ret=%d\n",
+		dev_err(port->dev, "fail to request serial irq %u, ret=%d\n",
 			port->irq, ret);
 		return ret;
 	}
@@ -785,7 +788,6 @@ static void sprd_set_termios(struct uart_port *port,
 
 	/* ask the core to calculate the divisor for us */
 	baud = uart_get_baud_rate(port, termios, old, 0, SPRD_BAUD_IO_LIMIT);
-
 	quot = port->uartclk / baud;
 
 	/* set data length */
@@ -906,6 +908,7 @@ static int sprd_verify_port(struct uart_port *port, struct serial_struct *ser)
 	return 0;
 }
 
+
 static void sprd_pm(struct uart_port *port, unsigned int state,
 		unsigned int oldstate)
 {
@@ -920,7 +923,36 @@ static void sprd_pm(struct uart_port *port, unsigned int state,
 		clk_disable_unprepare(sup->clk);
 		break;
 	}
+
 }
+
+#ifdef CONFIG_CONSOLE_POLL
+static int sprd_poll_init(struct uart_port *port)
+{
+	if (port->state->pm_state != UART_PM_STATE_ON) {
+		sprd_pm(port, UART_PM_STATE_ON, 0);
+		port->state->pm_state = UART_PM_STATE_ON;
+	}
+
+	return 0;
+}
+
+static int sprd_poll_get_char(struct uart_port *port)
+{
+	while (!(serial_in(port, SPRD_STS1) & SPRD_RX_FIFO_CNT_MASK))
+		cpu_relax();
+
+	return serial_in(port, SPRD_RXD);
+}
+
+static void sprd_poll_put_char(struct uart_port *port, unsigned char ch)
+{
+	while (serial_in(port, SPRD_STS1) & SPRD_TX_FIFO_CNT_MASK)
+		cpu_relax();
+
+	serial_out(port, SPRD_TXD, ch);
+}
+#endif
 
 static const struct uart_ops serial_sprd_ops = {
 	.tx_empty = sprd_tx_empty,
@@ -939,6 +971,11 @@ static const struct uart_ops serial_sprd_ops = {
 	.config_port = sprd_config_port,
 	.verify_port = sprd_verify_port,
 	.pm = sprd_pm,
+#ifdef CONFIG_CONSOLE_POLL
+	.poll_init	= sprd_poll_init,
+	.poll_get_char	= sprd_poll_get_char,
+	.poll_put_char	= sprd_poll_put_char,
+#endif
 };
 
 #ifdef CONFIG_SERIAL_SPRD_CONSOLE
@@ -984,9 +1021,10 @@ static void sprd_console_write(struct console *co, const char *s,
 		spin_unlock_irqrestore(&port->lock, flags);
 }
 
-static int __init sprd_console_setup(struct console *co, char *options)
+static int sprd_console_setup(struct console *co, char *options)
 {
 	struct sprd_uart_port *sprd_uart_port;
+	int ret;
 	int baud = 115200;
 	int bits = 8;
 	int parity = 'n';
@@ -1004,8 +1042,13 @@ static int __init sprd_console_setup(struct console *co, char *options)
 	if (options)
 		uart_parse_options(options, &baud, &parity, &bits, &flow);
 
-	return uart_set_options(&sprd_uart_port->port, co, baud,
-				parity, bits, flow);
+	ret = uart_set_options(&sprd_uart_port->port, co, baud,
+			       parity, bits, flow);
+
+	sprd_port[co->index]->is_console = 1;
+	sprd_port[co->index]->cflag_old = co->cflag;
+	return ret;
+
 }
 
 static struct uart_driver sprd_uart_driver;
@@ -1121,6 +1164,7 @@ static bool sprd_uart_is_console(struct uart_port *uport)
 		return true;
 
 	return false;
+
 }
 
 static int sprd_clk_init(struct uart_port *uport)
@@ -1130,14 +1174,14 @@ static int sprd_clk_init(struct uart_port *uport)
 
 	clk_uart = devm_clk_get(uport->dev, "uart");
 	if (IS_ERR(clk_uart)) {
-		dev_warn(uport->dev, "uart%d can't get uart clock\n",
+		dev_warn(uport->dev, "uart%u can't get uart clock\n",
 			 uport->line);
 		clk_uart = NULL;
 	}
 
 	clk_parent = devm_clk_get(uport->dev, "source");
 	if (IS_ERR(clk_parent)) {
-		dev_warn(uport->dev, "uart%d can't get source clock\n",
+		dev_warn(uport->dev, "uart%u can't get source clock\n",
 			 uport->line);
 		clk_parent = NULL;
 	}
@@ -1152,7 +1196,7 @@ static int sprd_clk_init(struct uart_port *uport)
 		if (PTR_ERR(u->clk) == -EPROBE_DEFER)
 			return -EPROBE_DEFER;
 
-		dev_warn(uport->dev, "uart%d can't get enable clock\n",
+		dev_warn(uport->dev, "uart%u can't get enable clock\n",
 			uport->line);
 
 		/* To keep console alive even if the error occurred */
@@ -1187,6 +1231,7 @@ static int sprd_probe(struct platform_device *pdev)
 	if (!sprd_port[index])
 		return -ENOMEM;
 
+	sprd_port[index]->is_console = 0;
 	up = &sprd_port[index]->port;
 	up->dev = &pdev->dev;
 	up->line = index;
@@ -1198,9 +1243,8 @@ static int sprd_probe(struct platform_device *pdev)
 	up->flags = UPF_BOOT_AUTOCONF;
 
 	ret = sprd_clk_init(up);
-	if (ret)
-		return ret;
-
+	if (ret < 0)
+		dev_err(&pdev->dev, " fail to get source clk\n");
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	up->membase = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(up->membase))
@@ -1229,7 +1273,6 @@ static int sprd_probe(struct platform_device *pdev)
 		}
 	}
 	sprd_ports_num++;
-
 	ret = uart_add_one_port(&sprd_uart_driver, up);
 	if (ret) {
 		sprd_port[index] = NULL;
@@ -1237,7 +1280,6 @@ static int sprd_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, up);
-
 	return ret;
 }
 
@@ -1246,8 +1288,10 @@ static int sprd_suspend(struct device *dev)
 {
 	struct sprd_uart_port *sup = dev_get_drvdata(dev);
 
-	uart_suspend_port(&sprd_uart_driver, &sup->port);
+	if (sup->is_console)
+		sup->port.cons->cflag = sup->cflag_old;
 
+	uart_suspend_port(&sprd_uart_driver, &sup->port);
 	return 0;
 }
 
@@ -1256,7 +1300,6 @@ static int sprd_resume(struct device *dev)
 	struct sprd_uart_port *sup = dev_get_drvdata(dev);
 
 	uart_resume_port(&sprd_uart_driver, &sup->port);
-
 	return 0;
 }
 #endif
@@ -1278,6 +1321,25 @@ static struct platform_driver sprd_platform_driver = {
 		.pm	= &sprd_pm_ops,
 	},
 };
+
+#ifdef CONFIG_SPRD_HANG_DEBUG_UART
+/*
+ * Add the following func for log output of sprd-hang-debug because of
+ * lockless requirement.
+ */
+void sprd_hangd_console_write(const char *s, unsigned int count)
+{
+	struct uart_port *port;
+
+	if (!sprd_uart_driver.cons || sprd_uart_driver.cons->index < 0)
+		return;
+
+	port = &sprd_port[sprd_uart_driver.cons->index]->port;
+	uart_console_write(port, s, count, sprd_console_putchar);
+	wait_for_xmitr(port);
+}
+EXPORT_SYMBOL(sprd_hangd_console_write);
+#endif
 
 module_platform_driver(sprd_platform_driver);
 

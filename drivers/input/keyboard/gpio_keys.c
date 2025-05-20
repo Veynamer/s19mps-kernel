@@ -28,6 +28,9 @@
 #include <linux/of_irq.h>
 #include <linux/spinlock.h>
 #include <dt-bindings/input/gpio-keys.h>
+#include <linux/of_platform.h>
+#include <linux/pinctrl/consumer.h>
+#include "prj/prj_config.h"
 
 struct gpio_button_data {
 	const struct gpio_keys_button *button;
@@ -761,6 +764,46 @@ static const struct of_device_id gpio_keys_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, gpio_keys_of_match);
 
+#if defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL3)
+static void sprd_pin_set(struct platform_device *pdev)
+{
+	static struct pinctrl *p;
+	struct pinctrl_state *pinctrl_state0,*pinctrl_state1;
+	char *s0 = "eic_dbc2";
+	char *s1 = "eic_dbc3";
+
+	printk(KERN_EMERG"this is gpio to eic pinctrl -----\n");
+
+	p = devm_pinctrl_get(&pdev->dev);
+
+  if (IS_ERR_OR_NULL(p)) {
+	  dev_info(&pdev->dev,"%s No pinctrl found\n",__func__);
+	  p = NULL;
+	  return;
+  }
+
+	pinctrl_state0 = pinctrl_lookup_state(p, s0);
+	if (IS_ERR_OR_NULL(pinctrl_state0)) {
+		dev_info(&pdev->dev,"Failed get pinctrl state\n");
+		devm_pinctrl_put(p);
+		p = NULL;
+		return;
+	}
+	pinctrl_select_state(p, pinctrl_state0);
+		
+	pinctrl_state1 = pinctrl_lookup_state(p, s1);
+
+	if (IS_ERR_OR_NULL(pinctrl_state1)) {
+		dev_info(&pdev->dev,"Failed get pinctrl state\n");
+		devm_pinctrl_put(p);
+		p = NULL;
+		return;
+	}
+
+	pinctrl_select_state(p, pinctrl_state1);
+}
+#endif
+
 static int gpio_keys_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -777,6 +820,9 @@ static int gpio_keys_probe(struct platform_device *pdev)
 			return PTR_ERR(pdata);
 	}
 
+#if defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL3)
+	sprd_pin_set(pdev);
+#endif
 	ddata = devm_kzalloc(dev, struct_size(ddata, data, pdata->nbuttons),
 			     GFP_KERNEL);
 	if (!ddata) {

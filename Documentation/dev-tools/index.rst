@@ -21,9 +21,12 @@ whole; patches welcome!
    kasan
    ubsan
    kmemleak
+   kfence
    gdb-kernel-debugging
    kgdb
    kselftest
+   kunit/index
+   pgo
 
 
 .. only::  subproject and html

@@ -3,6 +3,7 @@
  * Scheduler topology setup/handling methods
  */
 #include "sched.h"
+#include "sprd-eas.h"
 
 DEFINE_MUTEX(sched_domains_mutex);
 
@@ -201,11 +202,13 @@ sd_parent_degenerate(struct sched_domain *sd, struct sched_domain *parent)
 	return 1;
 }
 
-#if defined(CONFIG_ENERGY_MODEL) && defined(CONFIG_CPU_FREQ_GOV_SCHEDUTIL)
+#if defined(CONFIG_ENERGY_MODEL)
 DEFINE_STATIC_KEY_FALSE(sched_energy_present);
 unsigned int sysctl_sched_energy_aware = 1;
-DEFINE_MUTEX(sched_energy_mutex);
-bool sched_energy_update;
+static DEFINE_MUTEX(sched_energy_mutex);
+static bool sched_energy_update;
+static bool pd_cache_init;
+DEFINE_PER_CPU(struct pd_cache __rcu *, pdc);
 
 #ifdef CONFIG_PROC_SYSCTL
 int sched_energy_aware_handler(struct ctl_table *table, int write,
@@ -313,12 +316,43 @@ static void sched_energy_set(bool has_eas)
 	}
 }
 
+/* Free the buffers allocated for the pd_cache. */
+static void free_pd_cache(void)
+{
+	int cpu;
+	struct pd_cache *pd_cache;
+
+	for (cpu = 0; cpu < nr_cpu_ids; cpu++) {
+		pd_cache = rcu_access_pointer(per_cpu(pdc, cpu));
+		rcu_assign_pointer(per_cpu(pdc, cpu), NULL);
+		kfree(pd_cache);
+	}
+}
+
+/* Allocate the pd_cache buffers. */
+static struct pd_cache *allocate_pd_cache(void)
+{
+	struct pd_cache *pd_cache;
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		pd_cache = kmalloc_array(nr_cpu_ids, sizeof(*pd_cache),
+						GFP_KERNEL);
+		if (!pd_cache) {
+			free_pd_cache();
+			return NULL;
+		}
+		rcu_assign_pointer(per_cpu(pdc, cpu), pd_cache);
+	}
+
+	return pd_cache;
+}
+
 /*
  * EAS can be used on a root domain if it meets all the following conditions:
  *    1. an Energy Model (EM) is available;
  *    2. the SD_ASYM_CPUCAPACITY flag is set in the sched_domain hierarchy.
  *    3. the EM complexity is low enough to keep scheduling overheads low;
- *    4. schedutil is driving the frequency of all CPUs of the rd;
  *
  * The complexity of the Energy Model is defined as:
  *
@@ -338,15 +372,15 @@ static void sched_energy_set(bool has_eas)
  */
 #define EM_MAX_COMPLEXITY 2048
 
-extern struct cpufreq_governor schedutil_gov;
 static bool build_perf_domains(const struct cpumask *cpu_map)
 {
 	int i, nr_pd = 0, nr_cs = 0, nr_cpus = cpumask_weight(cpu_map);
+	struct pd_cache *pd_cache;
 	struct perf_domain *pd = NULL, *tmp;
 	int cpu = cpumask_first(cpu_map);
 	struct root_domain *rd = cpu_rq(cpu)->rd;
-	struct cpufreq_policy *policy;
-	struct cpufreq_governor *gov;
+	unsigned long min_cap = ULONG_MAX;
+	struct cpumask min_cpu_mask;
 
 	if (!sysctl_sched_energy_aware)
 		goto free;
@@ -361,22 +395,19 @@ static bool build_perf_domains(const struct cpumask *cpu_map)
 	}
 
 	for_each_cpu(i, cpu_map) {
+		unsigned long scale_cpu = arch_scale_cpu_capacity(i);
+
+		if (scale_cpu < min_cap) {
+			cpumask_clear(&min_cpu_mask);
+			min_cap = scale_cpu;
+		}
+
+		if (scale_cpu == min_cap)
+			cpumask_set_cpu(i, &min_cpu_mask);
+
 		/* Skip already covered CPUs. */
 		if (find_pd(pd, i))
 			continue;
-
-		/* Do not attempt EAS if schedutil is not being used. */
-		policy = cpufreq_cpu_get(i);
-		if (!policy)
-			goto free;
-		gov = policy->governor;
-		cpufreq_cpu_put(policy);
-		if (gov != &schedutil_gov) {
-			if (rd->pd)
-				pr_warn("rd %*pbl: Disabling EAS, schedutil is mandatory\n",
-						cpumask_pr_args(cpu_map));
-			goto free;
-		}
 
 		/* Create the new pd and add it to the local list. */
 		tmp = pd_init(i);
@@ -393,6 +424,9 @@ static bool build_perf_domains(const struct cpumask *cpu_map)
 		nr_cs += em_pd_nr_cap_states(pd->em_pd);
 	}
 
+	if (cpumask_weight(&min_cpu_mask))
+		cpumask_copy(&min_cap_cpu_mask, &min_cpu_mask);
+
 	/* Bail out if the Energy Model complexity is too high. */
 	if (nr_pd * (nr_cs + nr_cpus) > EM_MAX_COMPLEXITY) {
 		WARN(1, "rd %*pbl: Failed to start EAS, EM complexity is too high\n",
@@ -408,6 +442,13 @@ static bool build_perf_domains(const struct cpumask *cpu_map)
 	if (tmp)
 		call_rcu(&tmp->rcu, destroy_perf_domain_rcu);
 
+	if (!pd_cache_init) {
+		pd_cache = allocate_pd_cache();
+		if (!pd_cache)
+			goto free;
+		pd_cache_init = true;
+	}
+
 	return !!pd;
 
 free:
@@ -421,7 +462,7 @@ free:
 }
 #else
 static void free_pd(struct perf_domain *pd) { }
-#endif /* CONFIG_ENERGY_MODEL && CONFIG_CPU_FREQ_GOV_SCHEDUTIL*/
+#endif /* CONFIG_ENERGY_MODEL */
 
 static void free_rootdomain(struct rcu_head *rcu)
 {
@@ -510,6 +551,9 @@ static int init_rootdomain(struct root_domain *rd)
 
 	if (cpupri_init(&rd->cpupri) != 0)
 		goto free_cpudl;
+
+	init_max_cpu_capacity(&rd->max_cpu_capacity);
+
 	return 0;
 
 free_cpudl:
@@ -1144,7 +1188,11 @@ build_sched_groups(struct sched_domain *sd, int cpu)
  * group having more cpu_capacity will pickup more load compared to the
  * group having less cpu_capacity.
  */
+#ifdef CONFIG_SPRD_CORE_CTL
+void init_sched_groups_capacity(int cpu, struct sched_domain *sd)
+#else
 static void init_sched_groups_capacity(int cpu, struct sched_domain *sd)
+#endif
 {
 	struct sched_group *sg = sd->groups;
 
@@ -1152,8 +1200,15 @@ static void init_sched_groups_capacity(int cpu, struct sched_domain *sd)
 
 	do {
 		int cpu, max_cpu = -1;
+#ifdef CONFIG_SPRD_CORE_CTL
+		cpumask_t avail_mask;
 
+		cpumask_andnot(&avail_mask, sched_group_span(sg),
+			       cpu_isolated_mask);
+		sg->group_weight = cpumask_weight(&avail_mask);
+#else
 		sg->group_weight = cpumask_weight(sched_group_span(sg));
+#endif
 
 		if (!(sd->flags & SD_ASYM_PACKING))
 			goto next;
@@ -1377,18 +1432,9 @@ sd_init(struct sched_domain_topology_level *tl,
 	 * Convert topological properties into behaviour.
 	 */
 
-	if (sd->flags & SD_ASYM_CPUCAPACITY) {
-		struct sched_domain *t = sd;
-
-		/*
-		 * Don't attempt to spread across CPUs of different capacities.
-		 */
-		if (sd->child)
-			sd->child->flags &= ~SD_PREFER_SIBLING;
-
-		for_each_lower_domain(t)
-			t->flags |= SD_BALANCE_WAKE;
-	}
+	/* Don't attempt to spread across CPUs of different capacities. */
+	if ((sd->flags & SD_ASYM_CPUCAPACITY) && sd->child)
+		sd->child->flags &= ~SD_PREFER_SIBLING;
 
 	if (sd->flags & SD_SHARE_CPUCAPACITY) {
 		sd->imbalance_pct = 110;
@@ -1984,7 +2030,6 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 	enum s_alloc alloc_state = sa_none;
 	struct sched_domain *sd;
 	struct s_data d;
-	struct rq *rq = NULL;
 	int i, ret = -ENOMEM;
 	struct sched_domain_topology_level *tl_asym;
 	bool has_asym = false;
@@ -2053,24 +2098,13 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 	/* Attach the domains */
 	rcu_read_lock();
 	for_each_cpu(i, cpu_map) {
-		rq = cpu_rq(i);
 		sd = *per_cpu_ptr(d.sd, i);
-
-		/* Use READ_ONCE()/WRITE_ONCE() to avoid load/store tearing: */
-		if (rq->cpu_capacity_orig > READ_ONCE(d.rd->max_cpu_capacity))
-			WRITE_ONCE(d.rd->max_cpu_capacity, rq->cpu_capacity_orig);
-
 		cpu_attach_domain(sd, d.rd, i);
 	}
 	rcu_read_unlock();
 
 	if (has_asym)
 		static_branch_inc_cpuslocked(&sched_asym_cpucapacity);
-
-	if (rq && sched_debug_enabled) {
-		pr_info("root domain span: %*pbl (max cpu_capacity = %lu)\n",
-			cpumask_pr_args(cpu_map), rq->rd->max_cpu_capacity);
-	}
 
 	ret = 0;
 error:
@@ -2288,7 +2322,7 @@ match2:
 		;
 	}
 
-#if defined(CONFIG_ENERGY_MODEL) && defined(CONFIG_CPU_FREQ_GOV_SCHEDUTIL)
+#if defined(CONFIG_ENERGY_MODEL)
 	/* Build perf. domains: */
 	for (i = 0; i < ndoms_new; i++) {
 		for (j = 0; j < n && !sched_energy_update; j++) {

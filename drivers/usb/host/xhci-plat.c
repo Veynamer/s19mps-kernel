@@ -298,6 +298,9 @@ static int xhci_plat_probe(struct platform_device *pdev)
 		if (device_property_read_bool(tmpdev, "usb3-lpm-capable"))
 			xhci->quirks |= XHCI_LPM_SUPPORT;
 
+		if (device_property_read_bool(&pdev->dev, "usb3-slow-suspend"))
+			xhci->quirks |= XHCI_SLOW_SUSPEND;
+
 		if (device_property_read_bool(tmpdev, "quirk-broken-port-ped"))
 			xhci->quirks |= XHCI_BROKEN_PORT_PED;
 
@@ -390,7 +393,7 @@ static int xhci_plat_remove(struct platform_device *dev)
 
 	usb_remove_hcd(shared_hcd);
 	xhci->shared_hcd = NULL;
-	usb_phy_shutdown(hcd->usb_phy);
+	//usb_phy_shutdown(hcd->usb_phy);
 
 	usb_remove_hcd(hcd);
 	usb_put_hcd(shared_hcd);
@@ -398,6 +401,7 @@ static int xhci_plat_remove(struct platform_device *dev)
 	clk_disable_unprepare(clk);
 	clk_disable_unprepare(reg_clk);
 	usb_put_hcd(hcd);
+	usb_phy_shutdown(hcd->usb_phy);
 
 	pm_runtime_disable(&dev->dev);
 	pm_runtime_put_noidle(&dev->dev);

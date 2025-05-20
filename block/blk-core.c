@@ -38,6 +38,7 @@
 #include <linux/debugfs.h>
 #include <linux/bpf.h>
 #include <linux/psi.h>
+#include <linux/blk-crypto.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
@@ -120,6 +121,7 @@ void blk_rq_init(struct request_queue *q, struct request *rq)
 	rq->start_time_ns = ktime_get_ns();
 	rq->part = NULL;
 	refcount_set(&rq->ref, 1);
+	blk_crypto_rq_set_defaults(rq);
 }
 EXPORT_SYMBOL(blk_rq_init);
 
@@ -132,6 +134,9 @@ static const char *const blk_op_name[] = {
 	REQ_OP_NAME(SECURE_ERASE),
 	REQ_OP_NAME(ZONE_RESET),
 	REQ_OP_NAME(ZONE_RESET_ALL),
+	REQ_OP_NAME(ZONE_OPEN),
+	REQ_OP_NAME(ZONE_CLOSE),
+	REQ_OP_NAME(ZONE_FINISH),
 	REQ_OP_NAME(WRITE_SAME),
 	REQ_OP_NAME(WRITE_ZEROES),
 	REQ_OP_NAME(SCSI_IN),
@@ -615,6 +620,8 @@ bool bio_attempt_back_merge(struct request *req, struct bio *bio,
 	req->biotail = bio;
 	req->__data_len += bio->bi_iter.bi_size;
 
+	bio_crypt_free_ctx(bio);
+
 	blk_account_io_start(req, false);
 	return true;
 }
@@ -638,6 +645,8 @@ bool bio_attempt_front_merge(struct request *req, struct bio *bio,
 
 	req->__sector = bio->bi_iter.bi_sector;
 	req->__data_len += bio->bi_iter.bi_size;
+
+	bio_crypt_do_front_merge(req, bio);
 
 	blk_account_io_start(req, false);
 	return true;
@@ -845,11 +854,7 @@ static inline int blk_partition_remap(struct bio *bio)
 	if (unlikely(bio_check_ro(bio, p)))
 		goto out;
 
-	/*
-	 * Zone reset does not include bi_size so bio_sectors() is always 0.
-	 * Include a test for the reset op code and perform the remap if needed.
-	 */
-	if (bio_sectors(bio) || bio_op(bio) == REQ_OP_ZONE_RESET) {
+	if (bio_sectors(bio)) {
 		if (bio_check_eod(bio, part_nr_sects_read(p)))
 			goto out;
 		bio->bi_iter.bi_sector += p->start_sect;
@@ -936,6 +941,9 @@ generic_make_request_checks(struct bio *bio)
 			goto not_supported;
 		break;
 	case REQ_OP_ZONE_RESET:
+	case REQ_OP_ZONE_OPEN:
+	case REQ_OP_ZONE_CLOSE:
+	case REQ_OP_ZONE_FINISH:
 		if (!blk_queue_is_zoned(q))
 			goto not_supported;
 		break;
@@ -1061,7 +1069,8 @@ blk_qc_t generic_make_request(struct bio *bio)
 			/* Create a fresh bio_list for all subordinate requests */
 			bio_list_on_stack[1] = bio_list_on_stack[0];
 			bio_list_init(&bio_list_on_stack[0]);
-			ret = q->make_request_fn(q, bio);
+			if (blk_crypto_bio_prep(&bio))
+				ret = q->make_request_fn(q, bio);
 
 			blk_queue_exit(q);
 
@@ -1109,7 +1118,7 @@ blk_qc_t direct_make_request(struct bio *bio)
 {
 	struct request_queue *q = bio->bi_disk->queue;
 	bool nowait = bio->bi_opf & REQ_NOWAIT;
-	blk_qc_t ret;
+	blk_qc_t ret = BLK_QC_T_NONE;
 
 	if (!generic_make_request_checks(bio))
 		return BLK_QC_T_NONE;
@@ -1123,7 +1132,8 @@ blk_qc_t direct_make_request(struct bio *bio)
 		return BLK_QC_T_NONE;
 	}
 
-	ret = q->make_request_fn(q, bio);
+	if (blk_crypto_bio_prep(&bio))
+		ret = q->make_request_fn(q, bio);
 	blk_queue_exit(q);
 	return ret;
 }
@@ -1251,6 +1261,9 @@ blk_status_t blk_insert_cloned_request(struct request_queue *q, struct request *
 
 	if (rq->rq_disk &&
 	    should_fail_request(&rq->rq_disk->part0, blk_rq_bytes(rq)))
+		return BLK_STS_IOERR;
+
+	if (blk_crypto_insert_cloned_request(rq))
 		return BLK_STS_IOERR;
 
 	if (blk_queue_io_stat(q))
@@ -1401,6 +1414,161 @@ void blk_steal_bios(struct bio_list *list, struct request *rq)
 }
 EXPORT_SYMBOL_GPL(blk_steal_bios);
 
+#if defined(CONFIG_SPRD_DEBUG)
+static DEFINE_SPINLOCK(_io_lock);
+
+#define IO_ARRAY_SIZE 12	/* 2^(12-2) = 1024ms */
+/*
+ * convert ms to index: (ilog2(ms) + 1)
+ * array[6]++ means the time is: 32ms <= time < 64ms
+ * [0] [1] [2] [3] [4] [5]  [6]  [7]  [8]   [9]   [10]  [11]
+ * 0ms 1ms 2ms 4ms 8ms 16ms 32ms 64ms 128ms 256ms 512ms 1024ms
+ */
+
+struct io_disk_info {
+	char disk_name[32];
+	unsigned long rq_count;
+	unsigned long rq_count_bak;
+	unsigned long insert2issue[IO_ARRAY_SIZE];
+	unsigned long insert2issue_bak[IO_ARRAY_SIZE];
+	unsigned long issue2complete[IO_ARRAY_SIZE];
+	unsigned long issue2complete_bak[IO_ARRAY_SIZE];
+};
+
+struct io_debug_info {
+	struct io_disk_info	disk_info[4];
+	unsigned long insert2issue[IO_ARRAY_SIZE];
+	unsigned long insert2issue_bak[IO_ARRAY_SIZE];
+	unsigned long issue2complete[IO_ARRAY_SIZE];
+	unsigned long issue2complete_bak[IO_ARRAY_SIZE];
+	u64 start;
+};
+
+static struct io_debug_info io_debug = {
+	.disk_info = {
+		{
+			.disk_name = "sda",
+		},
+		{
+			.disk_name = "mmcblk0",
+		},
+		{
+			.disk_name = "mmcblk1",
+		},
+		{
+			.disk_name = "others"
+		},
+	},
+};
+
+static inline unsigned int ms_to_index(unsigned int ms)
+{
+	if (!ms)
+		return 0;	/* less than 1ms */
+
+	if (ms >= (1 << (IO_ARRAY_SIZE - 2)))
+		return (IO_ARRAY_SIZE - 1);
+
+	return min((IO_ARRAY_SIZE - 1), ilog2(ms) + 1);
+}
+
+#define io_log(array, fmt, ...) \
+	pr_info(fmt ":%5ld %4ld %4ld %4ld %4ld %4ld %4ld %4ld %4ld %4ld %4ld %4ld\n", \
+		##__VA_ARGS__, array[0], array[1], array[2], array[3], \
+		array[4], array[5], array[6], array[7], \
+		array[8], array[9], array[10], array[11])
+
+void _io_backup_log(u64 complete)
+{
+	struct io_disk_info *info;
+	int size, i;
+
+	size = sizeof(unsigned long) * IO_ARRAY_SIZE;
+
+	memcpy(io_debug.insert2issue_bak, io_debug.insert2issue, size);
+	memset(io_debug.insert2issue, 0, size);
+	memcpy(io_debug.issue2complete_bak, io_debug.issue2complete, size);
+	memset(io_debug.issue2complete, 0, size);
+
+	for (i = 0; i < 4; i++) {
+		info = &io_debug.disk_info[i];
+
+		info->rq_count_bak = info->rq_count;
+		if (!info->rq_count)
+			continue;
+
+		info->rq_count = 0;
+		memcpy(info->insert2issue_bak, info->insert2issue, size);
+		memset(info->insert2issue, 0, size);
+		memcpy(info->issue2complete_bak, info->issue2complete, size);
+		memset(info->issue2complete, 0, size);
+	}
+
+	io_debug.start = complete;
+}
+
+void _io_print_info(void)
+{
+	struct io_disk_info *info;
+	int i;
+
+	/* print insert to issue */
+	io_log(io_debug.insert2issue_bak, "io insert-issue");
+	for (i = 0; i < 4; i++) {
+		info = &io_debug.disk_info[i];
+		if (!info->rq_count_bak)
+			continue;
+		io_log(info->insert2issue_bak, "|_i2i%10s", info->disk_name);
+	}
+
+	/* print issue to complete */
+	io_log(io_debug.issue2complete_bak, "io issue - comp");
+	for (i = 0; i < 4; i++) {
+		info = &io_debug.disk_info[i];
+		if (!info->rq_count_bak)
+			continue;
+		io_log(info->issue2complete_bak, "|_i2c%10s", info->disk_name);
+	}
+}
+
+void _io_update(u64 complete, u64 issue, u64 insert, struct gendisk *disk)
+{
+	unsigned int msecs;
+	struct io_disk_info *info;
+	unsigned long flags;
+	int i, index;
+
+	for (i = 0; i < 4; i++) {
+		info = &io_debug.disk_info[i];
+		if (!strcmp(info->disk_name, disk->disk_name))
+			break;
+	}
+
+	spin_lock_irqsave(&_io_lock, flags);
+
+	++info->rq_count;
+
+	/* start/insert to issue */
+	msecs = ktime_to_ms(issue - insert);
+	index = ms_to_index(msecs);
+	++io_debug.insert2issue[index];
+	++info->insert2issue[index];
+
+	/* issue to complete */
+	msecs = ktime_to_ms(complete - issue);
+	index = ms_to_index(msecs);
+	++io_debug.issue2complete[index];
+	++info->issue2complete[index];
+
+	if (complete > (io_debug.start + (1000000000ULL * io_interval))) {
+		_io_backup_log(complete);
+		spin_unlock_irqrestore(&_io_lock, flags);
+		_io_print_info();
+	} else
+		spin_unlock_irqrestore(&_io_lock, flags);
+}
+#endif
+
 /**
  * blk_update_request - Special helper function for request stacking drivers
  * @req:      the request being processed
@@ -1432,6 +1600,12 @@ bool blk_update_request(struct request *req, blk_status_t error,
 {
 	int total_bytes;
 
+#if defined(CONFIG_SPRD_DEBUG)
+	if (req->io_start_time_ns && req->start_time_ns && req->rq_disk) {
+		_io_update(ktime_get_ns(), req->io_start_time_ns,
+			req->start_time_ns, req->rq_disk);
+	}
+#endif
 	trace_block_rq_complete(req, blk_status_to_errno(error), nr_bytes);
 
 	if (!req->bio)
@@ -1442,6 +1616,13 @@ bool blk_update_request(struct request *req, blk_status_t error,
 	    error == BLK_STS_OK)
 		req->q->integrity.profile->complete_fn(req, nr_bytes);
 #endif
+
+	/*
+	 * Upper layers may call blk_crypto_evict_key() anytime after the last
+	 * bio_endio().  Therefore, the keyslot must be released before that.
+	 */
+	if (blk_crypto_rq_has_keyslot(req) && nr_bytes >= blk_rq_bytes(req))
+		__blk_crypto_rq_put_keyslot(req);
 
 	if (unlikely(error && !blk_rq_is_passthrough(req) &&
 		     !(req->rq_flags & RQF_QUIET)))
@@ -1634,11 +1815,16 @@ int blk_rq_prep_clone(struct request *rq, struct request *rq_src,
 		if (rq->bio) {
 			rq->biotail->bi_next = bio;
 			rq->biotail = bio;
-		} else
+		} else {
 			rq->bio = rq->biotail = bio;
+		}
+		bio = NULL;
 	}
 
 	__blk_rq_prep_clone(rq, rq_src);
+
+	if (rq->bio && blk_crypto_rq_bio_prep(rq, rq->bio, gfp_mask) < 0)
+		goto free_and_out;
 
 	return 0;
 

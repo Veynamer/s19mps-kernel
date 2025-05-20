@@ -68,6 +68,7 @@
 #define SPRD_DMA_GLB_TRANS_DONE_TRG	BIT(18)
 #define SPRD_DMA_GLB_BLOCK_DONE_TRG	BIT(17)
 #define SPRD_DMA_GLB_FRAG_DONE_TRG	BIT(16)
+#define SPRD_DMA_GLB_TRG_MASK		GENMASK(19, 16)
 #define SPRD_DMA_GLB_TRG_OFFSET		16
 #define SPRD_DMA_GLB_DEST_CHN_MASK	GENMASK(13, 8)
 #define SPRD_DMA_GLB_DEST_CHN_OFFSET	8
@@ -99,6 +100,7 @@
 /* DMA_CHN_WARP_* register definition */
 #define SPRD_DMA_HIGH_ADDR_MASK		GENMASK(31, 28)
 #define SPRD_DMA_LOW_ADDR_MASK		GENMASK(31, 0)
+#define SPRD_DMA_WRAP_ADDR_MASK		GENMASK(27, 0)
 #define SPRD_DMA_HIGH_ADDR_OFFSET	4
 
 /* SPRD_DMA_CHN_INTC register definition */
@@ -118,6 +120,8 @@
 #define SPRD_DMA_SWT_MODE_OFFSET	26
 #define SPRD_DMA_REQ_MODE_OFFSET	24
 #define SPRD_DMA_REQ_MODE_MASK		GENMASK(1, 0)
+#define SPRD_DMA_WRAP_SEL_DEST		BIT(23)
+#define SPRD_DMA_WRAP_EN		BIT(22)
 #define SPRD_DMA_FIX_SEL_OFFSET		21
 #define SPRD_DMA_FIX_EN_OFFSET		20
 #define SPRD_DMA_LLIST_END		BIT(19)
@@ -438,40 +442,50 @@ static int sprd_dma_set_2stage_config(struct sprd_dma_chn *schan)
 		val = chn & SPRD_DMA_GLB_SRC_CHN_MASK;
 		val |= BIT(schan->trg_mode - 1) << SPRD_DMA_GLB_TRG_OFFSET;
 		val |= SPRD_DMA_GLB_2STAGE_EN;
-		if (schan->int_type != SPRD_DMA_NO_INT)
+		if (schan->int_type & SPRD_DMA_SRC_CHN0_INT)
 			val |= SPRD_DMA_GLB_SRC_INT;
 
-		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP1, val, val);
+		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP1,
+				    SPRD_DMA_GLB_SRC_INT |
+				    SPRD_DMA_GLB_TRG_MASK |
+				    SPRD_DMA_GLB_SRC_CHN_MASK, val);
 		break;
 
 	case SPRD_DMA_SRC_CHN1:
 		val = chn & SPRD_DMA_GLB_SRC_CHN_MASK;
 		val |= BIT(schan->trg_mode - 1) << SPRD_DMA_GLB_TRG_OFFSET;
 		val |= SPRD_DMA_GLB_2STAGE_EN;
-		if (schan->int_type != SPRD_DMA_NO_INT)
+		if (schan->int_type & SPRD_DMA_SRC_CHN1_INT)
 			val |= SPRD_DMA_GLB_SRC_INT;
 
-		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP2, val, val);
+		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP2,
+				    SPRD_DMA_GLB_SRC_INT |
+				    SPRD_DMA_GLB_TRG_MASK |
+				    SPRD_DMA_GLB_SRC_CHN_MASK, val);
 		break;
 
 	case SPRD_DMA_DST_CHN0:
 		val = (chn << SPRD_DMA_GLB_DEST_CHN_OFFSET) &
 			SPRD_DMA_GLB_DEST_CHN_MASK;
 		val |= SPRD_DMA_GLB_2STAGE_EN;
-		if (schan->int_type != SPRD_DMA_NO_INT)
+		if (schan->int_type & SPRD_DMA_DST_CHN0_INT)
 			val |= SPRD_DMA_GLB_DEST_INT;
 
-		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP1, val, val);
+		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP1,
+				    SPRD_DMA_GLB_DEST_INT |
+				    SPRD_DMA_GLB_DEST_CHN_MASK, val);
 		break;
 
 	case SPRD_DMA_DST_CHN1:
 		val = (chn << SPRD_DMA_GLB_DEST_CHN_OFFSET) &
 			SPRD_DMA_GLB_DEST_CHN_MASK;
 		val |= SPRD_DMA_GLB_2STAGE_EN;
-		if (schan->int_type != SPRD_DMA_NO_INT)
+		if (schan->int_type & SPRD_DMA_DST_CHN1_INT)
 			val |= SPRD_DMA_GLB_DEST_INT;
 
-		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP2, val, val);
+		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP2,
+				    SPRD_DMA_GLB_DEST_INT |
+				    SPRD_DMA_GLB_DEST_CHN_MASK, val);
 		break;
 
 	default:
@@ -481,6 +495,72 @@ static int sprd_dma_set_2stage_config(struct sprd_dma_chn *schan)
 	}
 
 	return 0;
+}
+
+static int sprd_dma_clear_2stage_config(struct sprd_dma_chn *schan)
+{
+	struct sprd_dma_dev *sdev = to_sprd_dma_dev(&schan->vc.chan);
+
+	switch (schan->chn_mode) {
+	case SPRD_DMA_SRC_CHN0:
+		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP1,
+				    SPRD_DMA_GLB_SRC_INT |
+				    SPRD_DMA_GLB_TRG_MASK |
+					SPRD_DMA_GLB_2STAGE_EN |
+				    SPRD_DMA_GLB_SRC_CHN_MASK, 0);
+		break;
+
+	case SPRD_DMA_SRC_CHN1:
+		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP2,
+				    SPRD_DMA_GLB_SRC_INT |
+				    SPRD_DMA_GLB_TRG_MASK |
+					SPRD_DMA_GLB_2STAGE_EN |
+				    SPRD_DMA_GLB_SRC_CHN_MASK, 0);
+		break;
+
+	case SPRD_DMA_DST_CHN0:
+		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP1,
+				    SPRD_DMA_GLB_DEST_INT |
+					SPRD_DMA_GLB_2STAGE_EN |
+				    SPRD_DMA_GLB_DEST_CHN_MASK, 0);
+		break;
+
+	case SPRD_DMA_DST_CHN1:
+		sprd_dma_glb_update(sdev, SPRD_DMA_GLB_2STAGE_GRP2,
+				    SPRD_DMA_GLB_DEST_INT |
+					SPRD_DMA_GLB_2STAGE_EN |
+				    SPRD_DMA_GLB_DEST_CHN_MASK, 0);
+		break;
+
+	default:
+		dev_err(sdev->dma_dev.dev, "invalid channel mode setting %d\n",
+			schan->chn_mode);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static void sprd_dma_set_pending(struct sprd_dma_chn *schan, bool enable)
+{
+	struct sprd_dma_dev *sdev = to_sprd_dma_dev(&schan->vc.chan);
+	u32 reg, val, req_id;
+
+	if (schan->dev_id == SPRD_DMA_SOFTWARE_UID)
+		return;
+
+	/* The DMA request id always starts from 0. */
+	req_id = schan->dev_id - 1;
+
+	if (req_id < 32) {
+		reg = SPRD_DMA_GLB_REQ_PEND0_EN;
+		val = BIT(req_id);
+	} else {
+		reg = SPRD_DMA_GLB_REQ_PEND1_EN;
+		val = BIT(req_id - 32);
+	}
+
+	sprd_dma_glb_update(sdev, reg, val, enable ? val : 0);
 }
 
 static void sprd_dma_set_chn_config(struct sprd_dma_chn *schan,
@@ -529,6 +609,7 @@ static void sprd_dma_start(struct sprd_dma_chn *schan)
 	 */
 	sprd_dma_set_chn_config(schan, schan->cur_desc);
 	sprd_dma_set_uid(schan);
+	sprd_dma_set_pending(schan, true);
 	sprd_dma_enable_chn(schan);
 
 	if (schan->dev_id == SPRD_DMA_SOFTWARE_UID &&
@@ -540,8 +621,15 @@ static void sprd_dma_start(struct sprd_dma_chn *schan)
 static void sprd_dma_stop(struct sprd_dma_chn *schan)
 {
 	sprd_dma_stop_and_disable(schan);
+	sprd_dma_set_pending(schan, false);
 	sprd_dma_unset_uid(schan);
 	sprd_dma_clear_int(schan);
+	/*
+	 * If 2-stage transfer is used, the configuration must be clear
+	 * when release DMA channel.
+	 */
+	if (schan->chn_mode)
+		sprd_dma_clear_2stage_config(schan);
 	schan->cur_desc = NULL;
 }
 
@@ -732,7 +820,9 @@ static int sprd_dma_fill_desc(struct dma_chan *chan,
 	phys_addr_t llist_ptr;
 
 	if (dir == DMA_MEM_TO_DEV) {
-		src_step = sprd_dma_get_step(slave_cfg->src_addr_width);
+		src_step = slave_cfg->src_port_window_size ?
+			   slave_cfg->src_port_window_size :
+			   sprd_dma_get_step(slave_cfg->src_addr_width);
 		if (src_step < 0) {
 			dev_err(sdev->dma_dev.dev, "invalid source step\n");
 			return src_step;
@@ -748,7 +838,9 @@ static int sprd_dma_fill_desc(struct dma_chan *chan,
 		else
 			dst_step = SPRD_DMA_NONE_STEP;
 	} else {
-		dst_step = sprd_dma_get_step(slave_cfg->dst_addr_width);
+		dst_step = slave_cfg->dst_port_window_size ?
+			   slave_cfg->dst_port_window_size :
+			   sprd_dma_get_step(slave_cfg->dst_addr_width);
 		if (dst_step < 0) {
 			dev_err(sdev->dma_dev.dev, "invalid destination step\n");
 			return dst_step;
@@ -804,6 +896,8 @@ static int sprd_dma_fill_desc(struct dma_chan *chan,
 	temp |= req_mode << SPRD_DMA_REQ_MODE_OFFSET;
 	temp |= fix_mode << SPRD_DMA_FIX_SEL_OFFSET;
 	temp |= fix_en << SPRD_DMA_FIX_EN_OFFSET;
+	temp |= schan->linklist.wrap_addr ?
+		SPRD_DMA_WRAP_EN | SPRD_DMA_WRAP_SEL_DEST : 0;
 	temp |= slave_cfg->src_maxburst & SPRD_DMA_FRG_LEN_MASK;
 	hw->frg_len = temp;
 
@@ -831,6 +925,12 @@ static int sprd_dma_fill_desc(struct dma_chan *chan,
 		hw->llist_ptr = lower_32_bits(llist_ptr);
 		hw->src_blk_step = (upper_32_bits(llist_ptr) << SPRD_DMA_LLIST_HIGH_SHIFT) &
 			SPRD_DMA_LLIST_HIGH_MASK;
+
+		if (schan->linklist.wrap_addr) {
+			hw->wrap_ptr |= schan->linklist.wrap_addr &
+				SPRD_DMA_WRAP_ADDR_MASK;
+			hw->wrap_to |= dst & SPRD_DMA_WRAP_ADDR_MASK;
+		}
 	} else {
 		hw->llist_ptr = 0;
 		hw->src_blk_step = 0;
@@ -939,9 +1039,11 @@ sprd_dma_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 
 		schan->linklist.phy_addr = ll_cfg->phy_addr;
 		schan->linklist.virt_addr = ll_cfg->virt_addr;
+		schan->linklist.wrap_addr = ll_cfg->wrap_addr;
 	} else {
 		schan->linklist.phy_addr = 0;
 		schan->linklist.virt_addr = 0;
+		schan->linklist.wrap_addr = 0;
 	}
 
 	/*
@@ -1161,16 +1263,8 @@ static int sprd_dma_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, sdev);
-	ret = sprd_dma_enable(sdev);
-	if (ret)
-		return ret;
-
-	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
-
-	ret = pm_runtime_get_sync(&pdev->dev);
-	if (ret < 0)
-		goto err_rpm;
+	pm_runtime_get_noresume(&pdev->dev);
 
 	ret = dma_async_device_register(&sdev->dma_dev);
 	if (ret < 0) {
@@ -1184,7 +1278,7 @@ static int sprd_dma_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_of_register;
 
-	pm_runtime_put(&pdev->dev);
+	pm_runtime_put_noidle(&pdev->dev);
 	return 0;
 
 err_of_register:
@@ -1192,8 +1286,6 @@ err_of_register:
 err_register:
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
-err_rpm:
-	sprd_dma_disable(sdev);
 	return ret;
 }
 
@@ -1249,10 +1341,30 @@ static int __maybe_unused sprd_dma_runtime_resume(struct device *dev)
 	return ret;
 }
 
+static int __maybe_unused sprd_dma_suspend_late(struct device *dev)
+{
+	if ((pm_runtime_status_suspended(dev)) ||
+	    (atomic_read(&(dev->power.usage_count)) > 1))
+		return 0;
+
+	return sprd_dma_runtime_suspend(dev);
+}
+
+static int __maybe_unused sprd_dma_resume_early(struct device *dev)
+{
+	if ((pm_runtime_status_suspended(dev)) ||
+	    (atomic_read(&(dev->power.usage_count)) > 1))
+		return 0;
+
+	return sprd_dma_runtime_resume(dev);
+}
+
 static const struct dev_pm_ops sprd_dma_pm_ops = {
 	SET_RUNTIME_PM_OPS(sprd_dma_runtime_suspend,
 			   sprd_dma_runtime_resume,
 			   NULL)
+	SET_LATE_SYSTEM_SLEEP_PM_OPS(sprd_dma_suspend_late,
+				     sprd_dma_resume_early)
 };
 
 static struct platform_driver sprd_dma_driver = {

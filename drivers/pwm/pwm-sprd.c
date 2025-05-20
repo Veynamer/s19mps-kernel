@@ -8,6 +8,7 @@
 #include <linux/io.h>
 #include <linux/math64.h>
 #include <linux/module.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pwm.h>
 
@@ -16,13 +17,12 @@
 #define SPRD_PWM_DUTY		0x8
 #define SPRD_PWM_ENABLE		0x18
 
-#define SPRD_PWM_MOD_MAX	GENMASK(7, 0)
+#define SPRD_PWM_MOD_MAX	GENMASK(9, 0)
 #define SPRD_PWM_DUTY_MSK	GENMASK(15, 0)
 #define SPRD_PWM_PRESCALE_MSK	GENMASK(7, 0)
 #define SPRD_PWM_ENABLE_BIT	BIT(0)
 
 #define SPRD_PWM_CHN_NUM	4
-#define SPRD_PWM_REGS_SHIFT	5
 #define SPRD_PWM_CHN_CLKS_NUM	2
 #define SPRD_PWM_CHN_OUTPUT_CLK	1
 
@@ -31,12 +31,25 @@ struct sprd_pwm_chn {
 	u32 clk_rate;
 };
 
+struct sprd_pwd_data {
+	int reg_shift;
+};
+
 struct sprd_pwm_chip {
 	void __iomem *base;
 	struct device *dev;
 	struct pwm_chip chip;
 	int num_pwms;
+	const struct sprd_pwd_data *pdata;
 	struct sprd_pwm_chn chn[SPRD_PWM_CHN_NUM];
+};
+
+static const struct sprd_pwd_data sharkl5_data = {
+		.reg_shift = 5,
+};
+
+static const struct sprd_pwd_data qogirn6pro_data = {
+		.reg_shift = 14,
 };
 
 /*
@@ -52,7 +65,7 @@ static const char * const sprd_pwm_clks[] = {
 
 static u32 sprd_pwm_read(struct sprd_pwm_chip *spc, u32 hwid, u32 reg)
 {
-	u32 offset = reg + (hwid << SPRD_PWM_REGS_SHIFT);
+	u32 offset = reg + (hwid << spc->pdata->reg_shift);
 
 	return readl_relaxed(spc->base + offset);
 }
@@ -60,7 +73,7 @@ static u32 sprd_pwm_read(struct sprd_pwm_chip *spc, u32 hwid, u32 reg)
 static void sprd_pwm_write(struct sprd_pwm_chip *spc, u32 hwid,
 			   u32 reg, u32 val)
 {
-	u32 offset = reg + (hwid << SPRD_PWM_REGS_SHIFT);
+	u32 offset = reg + (hwid << spc->pdata->reg_shift);
 
 	writel_relaxed(val, spc->base + offset);
 }
@@ -102,12 +115,12 @@ static void sprd_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 	 */
 	val = sprd_pwm_read(spc, pwm->hwpwm, SPRD_PWM_PRESCALE);
 	prescale = val & SPRD_PWM_PRESCALE_MSK;
-	tmp = (prescale + 1) * NSEC_PER_SEC * SPRD_PWM_MOD_MAX;
+	tmp = ((u64)prescale + 1) * NSEC_PER_SEC * SPRD_PWM_MOD_MAX;
 	state->period = DIV_ROUND_CLOSEST_ULL(tmp, chn->clk_rate);
 
 	val = sprd_pwm_read(spc, pwm->hwpwm, SPRD_PWM_DUTY);
 	duty = val & SPRD_PWM_DUTY_MSK;
-	tmp = (prescale + 1) * NSEC_PER_SEC * duty;
+	tmp = ((u64)prescale + 1) * NSEC_PER_SEC * duty;
 	state->duty_cycle = DIV_ROUND_CLOSEST_ULL(tmp, chn->clk_rate);
 
 	/* Disable PWM clocks if the PWM channel is not in enable state. */
@@ -132,11 +145,16 @@ static int sprd_pwm_config(struct sprd_pwm_chip *spc, struct pwm_device *pwm,
 	 * gets the maximal length not bigger than the requested one with the
 	 * given settings (MOD = SPRD_PWM_MOD_MAX and input clock).
 	 */
-	duty = duty_ns * SPRD_PWM_MOD_MAX / period_ns;
+	tmp = (u64)duty_ns * SPRD_PWM_MOD_MAX;
+	duty = DIV_ROUND_CLOSEST_ULL(tmp, period_ns);
 
 	tmp = (u64)chn->clk_rate * period_ns;
 	do_div(tmp, NSEC_PER_SEC);
-	prescale = DIV_ROUND_CLOSEST_ULL(tmp, SPRD_PWM_MOD_MAX) - 1;
+	prescale = DIV_ROUND_CLOSEST_ULL(tmp, SPRD_PWM_MOD_MAX);
+	if (prescale < 1)
+		prescale = 1;
+	prescale--;
+
 	if (prescale > SPRD_PWM_PRESCALE_MSK)
 		prescale = SPRD_PWM_PRESCALE_MSK;
 
@@ -180,10 +198,14 @@ static int sprd_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 			}
 		}
 
-		ret = sprd_pwm_config(spc, pwm, state->duty_cycle,
-				      state->period);
-		if (ret)
-			return ret;
+		if (state->period != cstate->period ||
+		    state->duty_cycle != cstate->duty_cycle ||
+		    state->enabled != cstate->enabled) {
+			ret = sprd_pwm_config(spc, pwm, state->duty_cycle,
+					      state->period);
+			if (ret)
+				return ret;
+		}
 
 		sprd_pwm_write(spc, pwm->hwpwm, SPRD_PWM_ENABLE, 1);
 	} else if (cstate->enabled) {
@@ -249,6 +271,7 @@ static int sprd_pwm_clk_init(struct sprd_pwm_chip *spc)
 static int sprd_pwm_probe(struct platform_device *pdev)
 {
 	struct sprd_pwm_chip *spc;
+	const void *priv_data;
 	int ret;
 
 	spc = devm_kzalloc(&pdev->dev, sizeof(*spc), GFP_KERNEL);
@@ -258,6 +281,13 @@ static int sprd_pwm_probe(struct platform_device *pdev)
 	spc->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(spc->base))
 		return PTR_ERR(spc->base);
+
+	priv_data = of_device_get_match_data(&pdev->dev);
+	if (!priv_data) {
+		dev_err(&pdev->dev, "get regs shift failed!\n");
+		return -EINVAL;
+	}
+	spc->pdata = priv_data;
 
 	spc->dev = &pdev->dev;
 	platform_set_drvdata(pdev, spc);
@@ -286,7 +316,8 @@ static int sprd_pwm_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id sprd_pwm_of_match[] = {
-	{ .compatible = "sprd,ums512-pwm", },
+	{ .compatible = "sprd,sharkl5pro-pwm", .data = (void *)&sharkl5_data},
+	{ .compatible = "sprd,qogirn6pro-pwm", .data = (void *)&qogirn6pro_data},
 	{ },
 };
 MODULE_DEVICE_TABLE(of, sprd_pwm_of_match);

@@ -17,13 +17,16 @@ obj-$(CONFIG_ISCSI_IBFT)	+= iscsi_ibft.o
 obj-$(CONFIG_FIRMWARE_MEMMAP)	+= memmap.o
 obj-$(CONFIG_RASPBERRYPI_FIRMWARE) += raspberrypi.o
 obj-$(CONFIG_FW_CFG_SYSFS)	+= qemu_fw_cfg.o
-obj-$(CONFIG_QCOM_SCM)		+= qcom_scm.o
-obj-$(CONFIG_QCOM_SCM_64)	+= qcom_scm-64.o
-obj-$(CONFIG_QCOM_SCM_32)	+= qcom_scm-32.o
+obj-$(CONFIG_QCOM_SCM_64)	+= qcom-scm-64.o
+obj-$(CONFIG_QCOM_SCM_32)	+= qcom-scm-32.o
+qcom-scm-64-objs += qcom_scm.o qcom_scm-64.o
+qcom-scm-32-objs += qcom_scm.o qcom_scm-32.o
+
 CFLAGS_qcom_scm-32.o :=$(call as-instr,.arch armv7-a\n.arch_extension sec,-DREQUIRES_SEC=1) -march=armv7-a
 obj-$(CONFIG_TI_SCI_PROTOCOL)	+= ti_sci.o
 obj-$(CONFIG_TRUSTED_FOUNDATIONS) += trusted_foundations.o
 obj-$(CONFIG_TURRIS_MOX_RWTM)	+= turris-mox-rwtm.o
+obj-$(CONFIG_SPRD_SIP_FW)	+= sprd_sip_svc.o
 
 obj-$(CONFIG_ARM_SCMI_PROTOCOL)	+= arm_scmi/
 obj-y				+= psci/

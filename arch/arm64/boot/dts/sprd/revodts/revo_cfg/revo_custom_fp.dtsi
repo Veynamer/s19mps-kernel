@@ -1,0 +1,36 @@
+/ {
+	fragment {
+		target-path = "/";
+		__overlay__ {
+                // fingerprint dts
+                blestech_fp:fingerprint_blestech {
+                        compatible = "sprd,betterlife-fp";
+                        reset-gpio = <&ap_gpio 138 0 >;
+                        int_gpio = <&eic_async 28 0 >;
+                };
+
+                cdfinger_fp:cdfinger_fingerprint {
+                        compatible = "cdfinger,fingerprint";
+                        fpreset-gpios = <&ap_gpio 138 0 >;
+                        fpint-gpios = <&eic_async 28 0 >;
+                };
+
+                sunwave_fp:sunwave-fp {
+                        compatible = "sunwave,fingerprint";
+                        sunwave,reset-gpio = <&ap_gpio 138 0 >;
+                        sunwave,irq-gpio = <&eic_async 28 0 >;
+                };
+
+                microarray_fp:ma-fingerprint {
+                        compatible = "microarray,fingerprint";
+                        maint-gpios = <&eic_async 28 0>;
+                };
+
+                chipone_fp:fpsensor-fp {
+                        compatible = "fpsensor,fingerprint";
+                        fpreset-gpios = <&ap_gpio 138 0 >;
+                        fpint-gpios = <&eic_async 28 0 >;
+                };
+		};
+	};
+};

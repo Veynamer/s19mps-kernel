@@ -43,6 +43,7 @@ KBUILD_CFLAGS += $(call as-option,-Wa$(comma)-mrelax-relocations=no)
 
 KBUILD_AFLAGS  := $(KBUILD_CFLAGS) -D__ASSEMBLY__
 GCOV_PROFILE := n
+PGO_PROFILE := n
 UBSAN_SANITIZE :=n
 
 KBUILD_LDFLAGS := -m elf_$(UTS_MACHINE)
@@ -56,6 +57,9 @@ else
 # command-line option, -z noreloc-overflow.
 KBUILD_LDFLAGS += $(shell $(LD) --help 2>&1 | grep -q "\-z noreloc-overflow" \
 	&& echo "-z noreloc-overflow -pie --no-dynamic-linker")
+endif
+ifeq ($(CONFIG_RELOCATABLE), y)
+KBUILD_LDFLAGS += -z notext
 endif
 
 KBUILD_LDFLAGS += -z noexecstack

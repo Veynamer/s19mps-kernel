@@ -157,6 +157,34 @@ ENTRY(ret_from_fork)
 	b	ret_slow_syscall
 ENDPROC(ret_from_fork)
 
+#if IS_ENABLED(CONFIG_SPRD_HANG_DEBUG)
+ENTRY(entry_for_wdh_el1)
+	sub	sp, sp, #PT_REGS_SIZE
+	str	r0, [sp, #S_R0]
+	str	r1, [sp, #S_R1]
+	str	r2, [sp, #S_R2]
+	str	r3, [sp, #S_R3]
+	str	r4, [sp, #S_R4]
+	str	r5, [sp, #S_R5]
+	str	r6, [sp, #S_R6]
+	str	r7, [sp, #S_R7]
+	str	r8, [sp, #S_R8]
+	str	r9, [sp, #S_R9]
+	str	r10, [sp, #S_R10]
+	str	r11, [sp, #S_FP]
+	str	r12, [sp, #S_IP]
+	str	r14, [sp, #S_LR]
+	add r1, sp, #PT_REGS_SIZE
+	str	r1, [sp, #S_SP]
+	mov	r0, sp
+	bl   wdh_atf_entry
+ENDPROC(entry_for_wdh_el1)
+
+ENTRY(entry_for_wdh_el2)
+	b .
+ENDPROC(entry_for_wdh_el2)
+#endif
+
 /*=============================================================================
  * SWI handler
  *-----------------------------------------------------------------------------
@@ -481,4 +509,27 @@ ENDPROC(sys_oabi_readahead)
 	syscall_table_end sys_oabi_call_table
 
 #endif
-
+ENTRY(get_pt_regs)
+	push	{r1, r2, r3, lr}
+	str	r0, [r0, #S_R0]
+	str	r1, [r0, #S_R1]
+	str	r2, [r0, #S_R2]
+	str	r3, [r0, #S_R3]
+	str	r4, [r0, #S_R4]
+	str	r5, [r0, #S_R5]
+	str	r6, [r0, #S_R6]
+	str	r7, [r0, #S_R7]
+	str	r8, [r0, #S_R8]
+	str	r9, [r0, #S_R9]
+	str	r10, [r0, #S_R10]
+	str	r11, [r0, #S_FP]
+	str	r12, [r0, #S_IP]
+	mrs	r3, cpsr
+	str	r3, [r0, #S_PSR]
+	add	r1, sp, #16 			//get preceding sp
+	str	r1, [r0, #S_SP] 		//set sp
+	ldr	r2, [sp, #12] 			//get preceding lr
+	str	r2, [r0, #S_LR] 		//set lr
+	str	r14, [r0, #S_PC]
+	pop	{r1, r2, r3, pc}
+ENDPROC(get_pt_regs)

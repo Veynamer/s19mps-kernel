@@ -38,3 +38,5 @@ obj-y += proximity/
 obj-y += resolver/
 obj-y += temperature/
 obj-y += trigger/
+obj-$(CONFIG_SPRD_SENSOR_HUB) += sprd_hub/
+obj-$(CONFIG_SPRD_SENSOR_HUB_NEW) += sprd_hub_new/

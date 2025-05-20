@@ -295,7 +295,8 @@ drm_internal_framebuffer_create(struct drm_device *dev,
 	struct drm_framebuffer *fb;
 	int ret;
 
-	if (r->flags & ~(DRM_MODE_FB_INTERLACED | DRM_MODE_FB_MODIFIERS)) {
+	if (r->flags & ~(DRM_MODE_FB_INTERLACED | DRM_MODE_FB_MODIFIERS |
+			DRM_MODE_FB_SECURE)) {
 		DRM_DEBUG_KMS("bad framebuffer flags 0x%08x\n", r->flags);
 		return ERR_PTR(-EINVAL);
 	}
@@ -900,8 +901,15 @@ retry:
 			goto unlock;
 	}
 
-	if (plane_mask)
-		ret = drm_atomic_commit(state);
+	/*
+	 * FIXME:
+	 * Deleted by SPRD for HWC performance. There is no need to
+	 * disable old planes for sprd drm. Because the dpu driver
+	 * will clean all the planes first before flip each time.
+	 *
+	 * if (plane_mask)
+	 *	ret = drm_atomic_commit(state);
+	 */
 
 unlock:
 	if (ret == -EDEADLK) {

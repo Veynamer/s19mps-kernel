@@ -7,6 +7,7 @@
 #include "compress.h"
 #include <linux/module.h>
 #include <linux/lz4.h>
+#include <linux/printk.h>
 
 #ifndef LZ4_DISTANCE_MAX	/* history window size */
 #define LZ4_DISTANCE_MAX 65535	/* set to maximum value by default */
@@ -14,7 +15,7 @@
 
 #define LZ4_MAX_DISTANCE_PAGES	(DIV_ROUND_UP(LZ4_DISTANCE_MAX, PAGE_SIZE) + 1)
 #ifndef LZ4_DECOMPRESS_INPLACE_MARGIN
-#define LZ4_DECOMPRESS_INPLACE_MARGIN(srcsize)  (((srcsize) >> 8) + 32)
+#define LZ4_DECOMPRESS_INPLACE_MARGIN(srcsize)  (((srcsize) >> 8) + 64)
 #endif
 
 struct z_erofs_decompressor {
@@ -78,8 +79,10 @@ static int z_erofs_lz4_prepare_destpages(struct z_erofs_decompress_req *rq,
 			get_page(victim);
 		} else {
 			victim = erofs_allocpage(pagepool, GFP_KERNEL, false);
-			if (!victim)
+			if (!victim) {
+				erofs_err(rq->sb, "line:%d erofs_allocpage() failed!", __LINE__);
 				return -ENOMEM;
+			}
 			victim->mapping = Z_EROFS_MAPPING_STAGING;
 		}
 		rq->out[i] = victim;
@@ -161,17 +164,27 @@ static int z_erofs_lz4_decompress(struct z_erofs_decompress_req *rq, u8 *out)
 		}
 	}
 
-	ret = LZ4_decompress_safe_partial(src + inputmargin, out,
-					  inlen, rq->outputsize,
-					  rq->outputsize);
-	if (ret < 0) {
-		erofs_err(rq->sb, "failed to decompress, in[%u, %u] out[%u]",
-			  inlen, inputmargin, rq->outputsize);
+	/* legacy format could compress extra data in a pcluster. */
+	if (rq->partial_decoding || !support_0padding)
+		ret = LZ4_decompress_safe_partial(src + inputmargin, out,
+						  inlen, rq->outputsize,
+						  rq->outputsize);
+	else
+		ret = LZ4_decompress_safe(src + inputmargin, out,
+					  inlen, rq->outputsize);
+
+	if (ret != rq->outputsize) {
+		erofs_err(rq->sb, "rq:%px failed to decompress %d in[%px, %u, %u](page ptr: %px) out[%px, %u]",
+			  rq, ret, src, inlen, inputmargin, rq->in[0], out, rq->outputsize);
+
 		WARN_ON(1);
 		print_hex_dump(KERN_DEBUG, "[ in]: ", DUMP_PREFIX_OFFSET,
 			       16, 1, src + inputmargin, inlen, true);
 		print_hex_dump(KERN_DEBUG, "[out]: ", DUMP_PREFIX_OFFSET,
 			       16, 1, out, rq->outputsize, true);
+
+		if (ret >= 0)
+			memset(out + ret, 0, rq->outputsize - ret);
 		ret = -EIO;
 	}
 
@@ -227,7 +240,7 @@ static int z_erofs_decompress_generic(struct z_erofs_decompress_req *rq,
 		PAGE_ALIGN(rq->pageofs_out + rq->outputsize) >> PAGE_SHIFT;
 	const struct z_erofs_decompressor *alg = decompressors + rq->alg;
 	unsigned int dst_maptype;
-	void *dst;
+	void *dst = NULL;
 	int ret, i;
 
 	if (nrpages_out == 1 && !rq->inplace_io) {
@@ -276,8 +289,10 @@ static int z_erofs_decompress_generic(struct z_erofs_decompress_req *rq,
 		vm_unmap_aliases();
 	}
 
-	if (!dst)
+	if (!dst) {
+		erofs_err(rq->sb, "line:%d kmap(out) failed!", __LINE__);
 		return -ENOMEM;
+	}
 
 	dst_maptype = 2;
 

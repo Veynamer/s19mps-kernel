@@ -30,6 +30,7 @@ endif
 
 CFLAGS_trace_benchmark.o := -I$(src)
 CFLAGS_trace_events_filter.o := -I$(src)
+CFLAGS_trace_irqsoff.o := -I$(srctree)
 
 obj-$(CONFIG_TRACE_CLOCK) += trace_clock.o
 
@@ -38,6 +39,7 @@ obj-$(CONFIG_RING_BUFFER) += ring_buffer.o
 obj-$(CONFIG_RING_BUFFER_BENCHMARK) += ring_buffer_benchmark.o
 
 obj-$(CONFIG_TRACING) += trace.o
+GCOV_PROFILE_trace.o := ${CONFIG_SPRD_FTRACE_GCOV}
 obj-$(CONFIG_TRACING) += trace_output.o
 obj-$(CONFIG_TRACING) += trace_seq.o
 obj-$(CONFIG_TRACING) += trace_stat.o
@@ -48,7 +50,10 @@ obj-$(CONFIG_CONTEXT_SWITCH_TRACER) += trace_sched_switch.o
 obj-$(CONFIG_FUNCTION_TRACER) += trace_functions.o
 obj-$(CONFIG_PREEMPTIRQ_TRACEPOINTS) += trace_preemptirq.o
 obj-$(CONFIG_IRQSOFF_TRACER) += trace_irqsoff.o
+obj-$(CONFIG_IRQSOFF_TRACER_BYTEDANCY) += trace_irqsoff_bytedancy.o
+obj-$(CONFIG_IRQSOFF_WARN) += irqsoff_warn.o
 obj-$(CONFIG_PREEMPT_TRACER) += trace_irqsoff.o
+obj-$(CONFIG_PREEMPT_WARN) += preemptoff_warn.o
 obj-$(CONFIG_SCHED_TRACER) += trace_sched_wakeup.o
 obj-$(CONFIG_HWLAT_TRACER) += trace_hwlat.o
 obj-$(CONFIG_NOP_TRACER) += trace_nop.o
@@ -72,6 +77,7 @@ obj-$(CONFIG_EVENT_TRACING) += trace_events_trigger.o
 obj-$(CONFIG_HIST_TRIGGERS) += trace_events_hist.o
 obj-$(CONFIG_BPF_EVENTS) += bpf_trace.o
 obj-$(CONFIG_KPROBE_EVENTS) += trace_kprobe.o
+obj-$(CONFIG_TRACEPOINTS) += error_report-traces.o
 obj-$(CONFIG_TRACEPOINTS) += power-traces.o
 ifeq ($(CONFIG_PM),y)
 obj-$(CONFIG_TRACEPOINTS) += rpm-traces.o
@@ -86,3 +92,4 @@ obj-$(CONFIG_UPROBE_EVENTS) += trace_uprobe.o
 obj-$(CONFIG_TRACEPOINT_BENCHMARK) += trace_benchmark.o
 
 libftrace-y := ftrace.o
+obj-$(CONFIG_SPRD_KTP) += sprd_ktp.o

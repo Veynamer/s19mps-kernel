@@ -763,46 +763,6 @@ static const struct of_device_id gpio_keys_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, gpio_keys_of_match);
 
-#if defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL3)
-static void sprd_pin_set(struct platform_device *pdev)
-{
-	static struct pinctrl *p;
-	struct pinctrl_state *pinctrl_state0,*pinctrl_state1;
-	char *s0 = "eic_dbc2";
-	char *s1 = "eic_dbc3";
-
-	printk(KERN_EMERG"this is gpio to eic pinctrl -----\n");
-
-	p = devm_pinctrl_get(&pdev->dev);
-
-  if (IS_ERR_OR_NULL(p)) {
-	  dev_info(&pdev->dev,"%s No pinctrl found\n",__func__);
-	  p = NULL;
-	  return;
-  }
-
-	pinctrl_state0 = pinctrl_lookup_state(p, s0);
-	if (IS_ERR_OR_NULL(pinctrl_state0)) {
-		dev_info(&pdev->dev,"Failed get pinctrl state\n");
-		devm_pinctrl_put(p);
-		p = NULL;
-		return;
-	}
-	pinctrl_select_state(p, pinctrl_state0);
-		
-	pinctrl_state1 = pinctrl_lookup_state(p, s1);
-
-	if (IS_ERR_OR_NULL(pinctrl_state1)) {
-		dev_info(&pdev->dev,"Failed get pinctrl state\n");
-		devm_pinctrl_put(p);
-		p = NULL;
-		return;
-	}
-
-	pinctrl_select_state(p, pinctrl_state1);
-}
-#endif
-
 static int gpio_keys_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -818,6 +778,89 @@ static int gpio_keys_probe(struct platform_device *pdev)
 		if (IS_ERR(pdata))
 			return PTR_ERR(pdata);
 	}
+
+	ddata = devm_kzalloc(dev, struct_size(ddata, data, pdata->nbuttons),
+			     GFP_KERNEL);
+	if (!ddata) {
+		dev_err(dev, "failed to allocate state\n");
+		return -ENOMEM;
+	}
+
+	ddata->keymap = devm_kcalloc(dev,
+				     pdata->nbuttons, sizeof(ddata->keymap[0]),
+				     GFP_KERNEL);
+	if (!ddata->keymap)
+		return -ENOMEM;
+
+	input = devm_input_allocate_device(dev);
+	if (!input) {
+		dev_err(dev, "failed to allocate input device\n");
+		return -ENOMEM;
+	}
+
+	ddata->pdata = pdata;
+	ddata->input = input;
+	mutex_init(&ddata->disable_lock);
+
+	platform_set_drvdata(pdev, ddata);
+	input_set_drvdata(input, ddata);
+
+	input->name = pdata->name ? : pdev->name;
+	input->phys = "gpio-keys/input0";
+	input->dev.parent = dev;
+	input->open = gpio_keys_open;
+	input->close = gpio_keys_close;
+
+	input->id.bustype = BUS_HOST;
+	input->id.vendor = 0x0001;
+	input->id.product = 0x0001;
+	input->id.version = 0x0100;
+
+	input->keycode = ddata->keymap;
+	input->keycodesize = sizeof(ddata->keymap[0]);
+	input->keycodemax = pdata->nbuttons;
+
+	/* Enable auto repeat feature of Linux input subsystem */
+	if (pdata->rep)
+		__set_bit(EV_REP, input->evbit);
+
+	for (i = 0; i < pdata->nbuttons; i++) {
+		const struct gpio_keys_button *button = &pdata->buttons[i];
+
+		if (!dev_get_platdata(dev)) {
+			child = device_get_next_child_node(dev, child);
+			if (!child) {
+				dev_err(dev,
+					"missing child device node for entry %d\n",
+					i);
+				return -EINVAL;
+			}
+		}
+
+		error = gpio_keys_setup_key(pdev, input, ddata,
+					    button, i, child);
+		if (error) {
+			fwnode_handle_put(child);
+			return error;
+		}
+
+		if (button->wakeup)
+			wakeup = 1;
+	}
+
+	fwnode_handle_put(child);
+
+	error = input_register_device(input);
+	if (error) {
+		dev_err(dev, "Unable to register input device, error: %d\n",
+			error);
+		return error;
+	}
+
+	device_init_wakeup(dev, wakeup);
+
+	return 0;
+}
 
 static int __maybe_unused
 gpio_keys_button_enable_wakeup(struct gpio_button_data *bdata)

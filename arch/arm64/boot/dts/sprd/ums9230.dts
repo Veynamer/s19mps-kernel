@@ -116,5 +116,3 @@
 	status = "okay";
 };
 
-
-#include "revodts/platform.dtsi"

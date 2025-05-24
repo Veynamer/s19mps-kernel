@@ -6,7 +6,6 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/mfd/sprd,sc2730-regs.h>
 #include <dt-bindings/mfd/sprd,sc2730-mask.h>
-#include "revodts/overlay_head.dtsi"
 #include "lcd/lcd_dummy_mipi.dtsi"
 
 / {

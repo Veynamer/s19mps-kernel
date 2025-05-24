@@ -20,7 +20,6 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
-#include "prj/prj_config.h"
 
 #ifndef BACKLIGHT_RESUME_DELAY_TIME
 #define BACKLIGHT_RESUME_DELAY_TIME   0

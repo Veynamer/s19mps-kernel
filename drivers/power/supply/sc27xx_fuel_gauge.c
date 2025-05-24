@@ -20,7 +20,6 @@
 #include <linux/slab.h>
 #include <linux/usb/phy.h>
 #include <linux/rtc.h>
-#include "prj/prj_config.h"
 
 /* PMIC global control registers definition */
 #define SC27XX_MODULE_EN0		0xc08
@@ -2049,13 +2048,6 @@ static int sc27xx_fgu_get_temp(struct sc27xx_fgu_data *data, int *temp)
 		*temp = 200;
 	}
 
-#ifndef  PRJ_FEATURE_H_BOARD_THERMISTOR_ENABLE
-	*temp = 200 ;
-	data->bat_temp = 200;
-#else
-	data->bat_temp = *temp;
-#endif
-
 	return 0;
 }
 
@@ -3113,40 +3105,6 @@ out:
 	power_supply_changed(data->battery);
 	return IRQ_HANDLED;
 }
-
-#if defined(PRJ_FEATURE_H_BOARD_BATTERY_DETECT)
-static irqreturn_t sc27xx_fgu_bat_detection(int irq, void *dev_id)
-{
-	struct sc27xx_fgu_data *data = dev_id;
-	int state;
-
-	if (!data) {
-		pr_err("%s:line%d: NULL pointer!!!\n", __func__, __LINE__);
-		return IRQ_HANDLED;
-	}
-
-	mutex_lock(&data->lock);
-
-	state = gpiod_get_value_cansleep(data->gpiod);
-	if (state < 0) {
-		dev_err(data->dev, "failed to get gpio state\n");
-		mutex_unlock(&data->lock);
-		return IRQ_RETVAL(state);
-	}
-
-	data->bat_present = !!state;
-
-	mutex_unlock(&data->lock);
-
-	power_supply_changed(data->battery);
-
-	cm_notify_event(data->battery,
-			data->bat_present ? CM_EVENT_BATT_IN : CM_EVENT_BATT_OUT,
-			NULL);
-
-	return IRQ_HANDLED;
-}
-#endif
 
 static void sc27xx_fgu_disable(void *_data)
 {
@@ -4579,23 +4537,7 @@ static int sc27xx_fgu_probe(struct platform_device *pdev)
 		device_property_read_bool(&pdev->dev, "sprd,basp");
 	if (!data->support_basp)
 		dev_info(&pdev->dev, "Do not support basp function\n");
-#if defined(PRJ_FEATURE_H_BOARD_BATTERY_DETECT)
-	data->gpiod = devm_gpiod_get(&pdev->dev, "bat-detect", GPIOD_IN);
-	if (IS_ERR(data->gpiod)) {
-		dev_err(dev, "failed to get battery detection GPIO\n");
-		return -ENXIO;
-	}
 
-	ret = gpiod_get_value_cansleep(data->gpiod);
-	if (ret < 0) {
-		dev_err(dev, "failed to get gpio state\n");
-		return ret;
-	}
-
-	data->bat_present = !!ret;
-#else
-	data->bat_present = true;
-#endif
 	mutex_init(&data->lock);
 	mutex_lock(&data->lock);
 
@@ -4634,25 +4576,6 @@ static int sc27xx_fgu_probe(struct platform_device *pdev)
 		dev_err(dev, "failed to request fgu IRQ\n");
 		goto err;
 	}
-
-#if defined(PRJ_FEATURE_H_BOARD_BATTERY_DETECT)
-	irq = gpiod_to_irq(data->gpiod);
-	if (irq < 0) {
-		dev_err(dev, "failed to translate GPIO to IRQ\n");
-		ret = irq;
-		goto err;
-	}
-
-	ret = devm_request_threaded_irq(dev, irq, NULL,
-					sc27xx_fgu_bat_detection,
-					IRQF_ONESHOT | IRQF_TRIGGER_RISING |
-					IRQF_TRIGGER_FALLING,
-					pdev->name, data);
-	if (ret) {
-		dev_err(dev, "failed to request IRQ\n");
-		goto err;
-	}
-#endif
 
 	device_init_wakeup(dev, true);
 	pm_wakeup_event(data->dev, SC27XX_FGU_TRACK_WAKE_UP_MS);

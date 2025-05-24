@@ -1921,4 +1921,3 @@
 		};
 	};
 };
-#include "revodts/platform.dtsi"

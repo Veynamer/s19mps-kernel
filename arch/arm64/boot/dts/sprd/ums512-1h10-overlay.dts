@@ -791,5 +791,3 @@
 		function = "func4";
 	};
 };
-
-#include "revodts/overlay_tail.dtsi"

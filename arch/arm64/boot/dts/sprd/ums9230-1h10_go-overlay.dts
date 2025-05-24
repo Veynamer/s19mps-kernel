@@ -8,7 +8,6 @@
 #include <dt-bindings/mfd/sprd,sc2730-mask.h>
 #include <dt-bindings/usb/pd.h>
 #include "ums9230-wcn.dtsi"
-#include "revodts/overlay_head.dtsi"
 #include "lcd/lcd_dummy_mipi.dtsi"
 
 / {
@@ -679,4 +678,3 @@
 			<32 0x197c>, <33 0x1988>, <35 0x19b8>, <39 0x19ac>;
 };
 
-#include "revodts/overlay_tail.dtsi"

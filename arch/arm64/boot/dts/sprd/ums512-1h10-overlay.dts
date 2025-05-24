@@ -68,6 +68,12 @@
 				fortsense,gpio_reset = <&ap_gpio 135 0 >;
 				fortsense,gpio_irq = <&eic_async 12 0 >;
 			};
+                        focaltech_fp:focaltech_fp {
+				compatible = "focaltech,fingerprint";
+                                fpreset-gpios = <&ap_gpio 131 0 >;
+				fpint-gpios = <&eic_async 13 0 >;
+			};
+
 			pwm_backlight: sprd_backlight {
 				compatible = "sprd,sharkl5pro-backlight";
 				pwms = <&pwms 2 40000>;

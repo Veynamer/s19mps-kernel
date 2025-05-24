@@ -34,4 +34,3 @@ Tips:
 	sprd,sc-id = "ums312 1000 1000";
 };
 
-#include "revodts/platform.dtsi"

@@ -438,53 +438,6 @@ struct musb {
 	struct	musb_host_ops	hops;
 };
 
-struct sprd_glue {
-	struct device		*dev;
-	struct platform_device		*musb;
-	struct clk		*clk;
-	struct phy		*phy;
-	struct usb_phy		*xceiv;
-	struct regulator	*vbus;
-	struct wakeup_source	*pd_wake_lock;
-	struct regmap		*pmu;
-	enum usb_dr_mode		dr_mode;
-	enum usb_dr_mode		wq_mode;
-
-	int		gpio_otg;  /* revo,otg_gpio */
-
-	int		vbus_irq;
-	int		usbid_irq;
-	spinlock_t		lock;
-	struct wakeup_source		*wake_lock;
-	struct work_struct		work;
-	struct delayed_work		recover_work;
-	struct extcon_dev		*edev;
-	struct extcon_dev		*id_edev;
-	struct notifier_block		hot_plug_nb;
-	struct notifier_block		vbus_nb;
-	struct notifier_block		id_nb;
-	struct notifier_block		audio_nb;
-
-	bool		bus_active;
-	bool		vbus_active;
-	bool		charging_mode;
-	bool		power_always_on;
-	bool		is_suspend;
-	int		host_disabled;
-	u32		usb_pub_slp_poll_offset;
-	u32		usb_pub_slp_poll_mask;
-	bool		suspending;
-	bool		retry_charger_detect;
-	int		usb_data_enabled;
-	enum usb_dr_mode		last_mode;
-	bool		use_singlefifo;
-	struct delayed_work		docking_boot_work;
-	struct delayed_work		docking_id_work;
-	int		key_id_irq;
-	struct regmap           *pmic;
-	bool		is_docking_online; //键盘在位标志
-};
-#endif
 /* This must be included after struct musb is defined */
 #include "musb_regs.h"
 

@@ -1,4 +1,0 @@
-&sdio0 {
-    /delete-property/ cd-gpios ;
-    cd-gpios = <&eic_async 35 GPIO_ACTIVE_HIGH>;
-};

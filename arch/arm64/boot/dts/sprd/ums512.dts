@@ -32,7 +32,7 @@
 
 	chosen: chosen {
 		stdout-path = "serial1:115200n8";
-		bootargs = "earlycon console=ttyS1,115200n8 loop.max_part=7 loglevel=1 init=/init root=/dev/ram0 rw printk.devkmsg=on androidboot.boot_devices=soc/soc:ap-apb/71400000.sdio dummy_hcd.num=0 swiotlb=1 initcall_debug=1 androidboot.init_fatal_panic=true";
+		bootargs = "earlycon console=ttySPRD1,115200n8 loop.max_part=7 loglevel=1 init=/init root=/dev/ram0 rw printk.devkmsg=on androidboot.boot_devices=soc/soc:ap-apb/71400000.sdio dummy_hcd.num=0 swiotlb=1 initcall_debug=1 androidboot.init_fatal_panic=true";
 	};
 
 	extcon_gpio: extcon-gpio {
@@ -89,6 +89,15 @@
 &spi0 {
 	/*used for fingerprint sensor*/
 	status = "okay";
+};
+
+&spi1 {
+        status = "okay";
+};
+
+&spi2 {
+        /*used for touchscreen sensor*/
+        status = "okay";
 };
 
 &sdio0 {
@@ -266,5 +275,3 @@ delete ucp1301
 	 * nodes from 56 to 67 (index from 38 to 49) are used by HIFI
 	 */
 };
-
-#include "revodts/platform.dtsi"

@@ -23,7 +23,7 @@
 #include <linux/usb/musb.h>
 #include <linux/phy/phy.h>
 #include <linux/workqueue.h>
-#include "prj/prj_config.h"
+//#include "prj/prj_config.h"
 
 struct musb;
 struct musb_hw_ep;

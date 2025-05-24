@@ -23,7 +23,6 @@
 #include <linux/usb/musb.h>
 #include <linux/phy/phy.h>
 #include <linux/workqueue.h>
-//#include "prj/prj_config.h"
 
 struct musb;
 struct musb_hw_ep;
@@ -439,12 +438,6 @@ struct musb {
 	struct	musb_host_ops	hops;
 };
 
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-struct musb_reg_info {
-	struct regmap		*regmap_ptr;
-	u32			args[2];
-};
-
 struct sprd_glue {
 	struct device		*dev;
 	struct platform_device		*musb;
@@ -454,7 +447,6 @@ struct sprd_glue {
 	struct regulator	*vbus;
 	struct wakeup_source	*pd_wake_lock;
 	struct regmap		*pmu;
-	struct musb_reg_info		usb31pllv_frc_on;
 	enum usb_dr_mode		dr_mode;
 	enum usb_dr_mode		wq_mode;
 

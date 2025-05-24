@@ -37,8 +37,6 @@
 #include <sprd_past_record.h>
 #endif
 
-#include "prj/prj_config.h"
-
 const char * const pm_labels[] = {
 	[PM_SUSPEND_TO_IDLE] = "freeze",
 	[PM_SUSPEND_STANDBY] = "standby",
@@ -636,12 +634,6 @@ int pm_suspend(suspend_state_t state)
 
 	if (state <= PM_SUSPEND_ON || state >= PM_SUSPEND_MAX)
 		return -EINVAL;
-
-#ifdef PRJ_FEATURE_H_BOARD_DISABLE_CPU_DEEPSLEEP
-	if(state == PM_SUSPEND_MEM) {
-		state = PM_SUSPEND_STANDBY;
-	}
-#endif
 
 	pr_info("suspend entry (%s)\n", mem_sleep_labels[state]);
 	error = enter_state(state);

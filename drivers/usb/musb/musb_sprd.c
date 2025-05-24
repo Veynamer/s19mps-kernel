@@ -20,13 +20,14 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_gpio.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/soc/sprd/sprd_usbpinmux.h>
 #include <linux/usb.h>
 #include <linux/usb/phy.h>
+#include <linux/usb/sprd_commonphy.h>
+#include <linux/usb/sprd_typec.h>
 #include <linux/usb/usb_phy_generic.h>
 #include <linux/wait.h>
 #include <linux/mfd/syscon.h>
@@ -35,7 +36,6 @@
 
 #include "musb_core.h"
 #include "sprd_musbhsdma.h"
-#include "prj/prj_config.h"
 
 #define DRIVER_DESC "Inventra Dual-Role USB Controller Driver"
 #define MUSB_VERSION "6.0"
@@ -47,9 +47,6 @@
 #define CHARGER_2NDDETECT_ENABLE	BIT(30)
 #define CHARGER_2NDDETECT_SELECT	BIT(31)
 
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-/* struct sprd_glue moved to musb_core.h */
-#else
 struct musb_reg_info {
 	struct regmap		*regmap_ptr;
 	u32			args[2];
@@ -93,52 +90,10 @@ struct sprd_glue {
 	int		usb_data_enabled;
 	enum usb_dr_mode		last_mode;
 	bool		use_singlefifo;
+	bool		use_pdhub_c2c;
 };
-#endif
 
 static int boot_charging;
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-static struct gpio_desc *key_id_desc;
-struct gpio_desc *usb_det_desc;   //Çø·ÖusbÖÐ¶ÏµÄÒý½Å
-
-static int docking_vcc; //¿ØÖÆ¼üÅÌ¹©µç
-static int hub_sw; //¿ØÖÆÇÐ»»dp/dm
-
-int otg_mode = 0;   //²åÈëotgÉè±¸±êÖ¾
-int dc_plug_inout = 0;  //dc²åÈë±êÖ¾
-int usb_plug_inout = 0;  //usbÏß²åÈë±êÖ¾
-int usb_other_plug_inout = 0; //³ýusbÒÔÍâµÄ²åÈë±êÖ¾
-
-static void switch_dpdm_to_usbphy(struct regmap *regmap, int dpdm_switch)
-{
-#if defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL5) || defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL5PRO)||defined(PRJ_FEATURE_H_BOARD_SOC_QOGIRL6)
-
-#define SC2730_CHARGE_STATUS		0x1b9c
-#define BIT_CHG_DET_DONE		BIT(11)
-#define BIT_SDP_INT			BIT(7)
-#define BIT_DCP_INT			BIT(6)
-#define BIT_CDP_INT			BIT(5)
-
-    u32 status = 0, val;
-
-    if (regmap_read(regmap, SC2730_CHARGE_STATUS, &val)) {
-    	pr_err("%s, read SC2730_CHARGE_STATUS error!\n", __func__);
-		return;
-	}
-
-    pr_err("%s, val = 0x%x\n", __func__, val);
-    if (val & BIT_CHG_DET_DONE) {
-        status = val & (BIT_CDP_INT | BIT_DCP_INT | BIT_SDP_INT);
-        if(status == BIT_DCP_INT) {
-            val &= ~(!dpdm_switch << 1);
-            regmap_write(regmap, SC2730_CHARGE_STATUS, val);
-        }
-    }
-    pr_err("%s, ret val = 0x%x\n", __func__, val);
-#endif
-}
-#endif //PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-
 #if IS_ENABLED(CONFIG_SPRD_USBM)
 static const bool is_slave = true;
 #else
@@ -154,6 +109,7 @@ int dwc3_sprd_probe_finish(void)
 }
 #endif
 static void musb_sprd_release_all_request(struct musb *musb);
+static bool sprd_musb_get_dpdm_from_usb(struct sprd_glue *glue);
 static void sprd_musb_enable(struct musb *musb)
 {
 	struct sprd_glue *glue = dev_get_drvdata(musb->controller->parent);
@@ -275,106 +231,7 @@ static irqreturn_t sprd_musb_interrupt(int irq, void *__hci)
 
 	return retval;
 }
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-static void dp_dm_dock_vcc_switchto_keyboard(int enable) //切换dp dm ，使能键盘供电
-{
-	int ret;
-	pr_info("%s:enable=%d\n",__func__, enable);
-	if (enable) {
-		if (gpio_is_valid(docking_vcc)) {
-				pr_info("%s:docking_vcc\n",__func__);
-				ret = gpio_direction_output(docking_vcc, 1);
-				if (ret)
-					pr_info("%s gpio: %d, set output highlevel failed\n",__func__, docking_vcc);
-		}
 
-		if (gpio_is_valid(hub_sw)) {
-				ret = gpio_direction_output(hub_sw, 1);
-				if (ret)
-					pr_info("%s gpio: %d, set output highlevel failed\n",__func__, hub_sw);
-		}
-
-	} else {
-		if (gpio_is_valid(docking_vcc)) {
-			pr_info("%s:docking_vcc\n",__func__);
-			ret = gpio_direction_output(docking_vcc, 0);
-			if (ret)
-				pr_info("%s gpio: %d, set output lowlevel failed\n",__func__, docking_vcc);
-		}
-
-		if (gpio_is_valid(hub_sw)) {
-			ret = gpio_direction_output(hub_sw, 0);
-			if (ret)
-				pr_info("%s gpio: %d, set output lowlevel failed\n",__func__, hub_sw);
-		}
-	}
-
-}
-
-static void musb_sprd_detect_kb_id(struct sprd_glue *glue)
-{
-	int kb_id = gpiod_get_value_cansleep(key_id_desc);
-	int usb_det = gpiod_get_value_cansleep(usb_det_desc);
-
-	pr_err("%s, kb_id = %d, usb_det = %d, usb_plug_inout = %d, otg_mode = %d\n",
-			__func__, kb_id, usb_det, usb_plug_inout, otg_mode);
-	if (!kb_id) {
-		//if (usb_plug_inout || dc_plug_inout) {
-		if (usb_plug_inout) {
-			/* if dc plug in, no need to continue finishing usb init process*/
-			glue->vbus_active = 0;                  //usb device shutdown
-			glue->wq_mode = USB_DR_MODE_PERIPHERAL;
-			queue_work(system_unbound_wq, &glue->work);
-			msleep(500);
-
-			glue->is_docking_online = 1;                 //keyboard resumed
-			glue->vbus_active = 1;
-			glue->wq_mode = USB_DR_MODE_HOST;
-			dp_dm_dock_vcc_switchto_keyboard(1);
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 0);
-			switch_dpdm_to_usbphy(glue->pmic, 0);
-		} else if (otg_mode == 1) {
-			glue->vbus_active = 0;                 //otg shutdown
-			glue->wq_mode = USB_DR_MODE_HOST;
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 1);
-			switch_dpdm_to_usbphy(glue->pmic, 1);
-
-			msleep(500);
-													//keyboad resume
-			glue->is_docking_online = 1;
-			glue->vbus_active = 1;
-			glue->wq_mode = USB_DR_MODE_HOST;
-			dp_dm_dock_vcc_switchto_keyboard(1);
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 0);
-			switch_dpdm_to_usbphy(glue->pmic, 0);
-
-		} else {
-			glue->is_docking_online = 1;
-			glue->vbus_active = 1;
-			glue->wq_mode = USB_DR_MODE_HOST;
-			dp_dm_dock_vcc_switchto_keyboard(1);
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 0);
-			switch_dpdm_to_usbphy(glue->pmic, 0);
-		}
-	}
-}
-
-static irqreturn_t usb_kb_id_irq_handler(int irq, void *id)
-{
-	struct sprd_glue *glue = (struct sprd_glue *)id;
-
-	pr_err("*********** usb_kb_id_irq_handler happen **********\n");
-
-	disable_irq_nosync(irq);
-	schedule_delayed_work(&glue->docking_id_work, msecs_to_jiffies(50));
-
-	return IRQ_HANDLED;
-}
-#endif
 static int sprd_musb_init(struct musb *musb)
 {
 	struct sprd_glue *glue = dev_get_drvdata(musb->controller->parent);
@@ -687,40 +544,41 @@ static int musb_sprd_vbus_notifier(struct notifier_block *nb,
 	struct sprd_glue *glue = container_of(nb, struct sprd_glue, vbus_nb);
 	unsigned long flags;
 
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-	struct usb_phy *usb_phy;
-	enum usb_charger_type type;
-
-	pr_err("%s, event = %ld, vbus_active=%d, dr_mode=%d\n", __func__, event, glue->vbus_active, glue->dr_mode);
-#endif
-
+	dev_info(glue->dev, "%s event:%d!\n", __func__, event);
 	if (is_slave) {
 		dev_info(glue->dev, "%s, event(%ld) ignored in slave mode\n", __func__, event);
 		return 0;
 	}
 
+	if (glue->use_pdhub_c2c &&
+		sc27xx_get_dr_swap_executing() &&
+		sc27xx_get_current_status_detach_or_attach())
+		flush_work(&glue->work);
+
 	if (event) {
-
-	#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-		usb_phy = glue->xceiv;
-		type = usb_phy->charger_detect(usb_phy);
-	#endif
 		spin_lock_irqsave(&glue->lock, flags);
-		if (glue->vbus_active == 1 && glue->dr_mode == USB_DR_MODE_HOST) {
-		#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-			pr_err("%s, vbus notifier, ignore device conn, usb_det = %d, charge type:%d\n",
-				__func__, gpiod_get_value_cansleep(usb_det_desc), type);
-			// usb_plug_inout = 1;
-		#endif
-			spin_unlock_irqrestore(&glue->lock, flags);
-			dev_info(glue->dev,
-				"ignore device connection detected from VBUS GPIO.\n");
-			return 0;
+		if (glue->use_pdhub_c2c) {
+			if (glue->vbus_active == 1) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"ignore device connection detected from VBUS GPIO.\n");
+				return 0;
+			}
+			if (sc27xx_get_dr_swap_executing() &&
+				!sc27xx_get_current_status_detach_or_attach()) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"dr_swap ignore device connection detected from VBUS GPIO\n");
+				return 0;
+			}
+		} else {
+			if (glue->vbus_active == 1 || glue->dr_mode == USB_DR_MODE_HOST) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"ignore device connection detected from VBUS GPIO.\n");
+				return 0;
+			}
 		}
-		#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-		usb_plug_inout = 1;
-		#endif
-
 		glue->vbus_active = 1;
 		glue->wq_mode = USB_DR_MODE_PERIPHERAL;
 		queue_work(system_unbound_wq, &glue->work);
@@ -729,30 +587,29 @@ static int musb_sprd_vbus_notifier(struct notifier_block *nb,
 			"device connection detected from VBUS GPIO.\n");
 	} else {
 		spin_lock_irqsave(&glue->lock, flags);
-		if (glue->vbus_active == 0 || glue->dr_mode == USB_DR_MODE_HOST) {
-		#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-			pr_err("%s, vbus notifier, ignore device discon, usb_det = %d\n",
-                    __func__, gpiod_get_value_cansleep(usb_det_desc));
-			pr_err("%s, usb_plug_inout = %d, dc_plug_inout = %d\n",
-                    __func__, usb_plug_inout, dc_plug_inout);
-			if ((usb_plug_inout || usb_other_plug_inout)) {
-					if (usb_plug_inout)
-							usb_plug_inout = 0;
-                    if (usb_other_plug_inout)
-                            usb_other_plug_inout = 0;
-                    spin_unlock_irqrestore(&glue->lock, flags);
-                    dev_info(glue->dev, "ignore device disconnect detected from VBUS GPIO. dc usb plug out or ac plug out\n");
-                    return 0;
+		if (glue->use_pdhub_c2c) {
+			if (glue->vbus_active == 0) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"ignore device disconnect detected from VBUS GPIO.\n");
+				return 0;
 			}
-		#endif
-			spin_unlock_irqrestore(&glue->lock, flags);
-			dev_info(glue->dev,
-				"ignore device disconnect detected from VBUS GPIO.\n");
-			return 0;
+			if (sc27xx_get_dr_swap_executing() &&
+				!sc27xx_get_current_status_detach_or_attach()) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"dr_swap ignore device disconnect detected from VBUS GPIO\n");
+				return 0;
+			}
+		} else {
+			if (glue->vbus_active == 0 || glue->dr_mode == USB_DR_MODE_HOST) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"ignore device disconnect detected from VBUS GPIO.\n");
+				return 0;
+			}
 		}
-		#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-		usb_plug_inout = 0;
-		#endif
+
 		glue->vbus_active = 0;
 		glue->wq_mode = USB_DR_MODE_PERIPHERAL;
 		queue_work(system_unbound_wq, &glue->work);
@@ -770,24 +627,40 @@ static int musb_sprd_id_notifier(struct notifier_block *nb,
 	struct sprd_glue *glue = container_of(nb, struct sprd_glue, id_nb);
 	unsigned long flags;
 
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-	pr_err("%s, event = %ld, vbus_active=%d, dr_mode=%d\n", __func__, event, glue->vbus_active, glue->dr_mode);
-#endif
+	dev_info(glue->dev, "%s event:%d!\n", __func__, event);
 	if (is_slave) {
 		dev_info(glue->dev, "%s, event(%ld) ignored in slave mode\n", __func__, event);
 		return 0;
 	}
+	/* typec is attach and drswap happen, ensure that the process is completed */
+	if (glue->use_pdhub_c2c &&
+		sc27xx_get_dr_swap_executing() &&
+		sc27xx_get_current_status_detach_or_attach())
+		flush_work(&glue->work);
 
 	if (event) {
 		spin_lock_irqsave(&glue->lock, flags);
-		#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-			otg_mode = 1;
-		#endif
-		if (glue->vbus_active == 1 || glue->dr_mode == USB_DR_MODE_PERIPHERAL) {
-			spin_unlock_irqrestore(&glue->lock, flags);
-			dev_info(glue->dev,
-				"ignore host connection detected from ID GPIO.\n");
-			return 0;
+		if (glue->use_pdhub_c2c) {
+			if (glue->vbus_active == 1) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"ignore host connection detected from ID GPIO.\n");
+				return 0;
+			}
+			if (sc27xx_get_dr_swap_executing() &&
+				!sc27xx_get_current_status_detach_or_attach()) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"dr_swap ignore host connection detected from ID GPIO\n");
+				return 0;
+			}
+		} else {
+			if (glue->vbus_active == 1 || glue->dr_mode == USB_DR_MODE_PERIPHERAL) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"ignore host connection detected from ID GPIO.\n");
+				return 0;
+			}
 		}
 
 		glue->vbus_active = 1;
@@ -798,14 +671,27 @@ static int musb_sprd_id_notifier(struct notifier_block *nb,
 			"host connection detected from ID GPIO.\n");
 	} else {
 		spin_lock_irqsave(&glue->lock, flags);
-		#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-			otg_mode = 0;
-		#endif
-		if (glue->vbus_active == 0 || glue->dr_mode == USB_DR_MODE_PERIPHERAL) {
-			spin_unlock_irqrestore(&glue->lock, flags);
-			dev_info(glue->dev,
-				"ignore host disconnect detected from ID GPIO.\n");
-			return 0;
+		if (glue->use_pdhub_c2c) {
+			if (glue->vbus_active == 0) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"ignore host disconnect detected from ID GPIO.\n");
+				return 0;
+			}
+			if (sc27xx_get_dr_swap_executing() &&
+				!sc27xx_get_current_status_detach_or_attach()) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"dr_swap ignore host disconnect detected from ID GPIO\n");
+				return 0;
+			}
+		} else {
+			if (glue->vbus_active == 0 || glue->dr_mode == USB_DR_MODE_PERIPHERAL) {
+				spin_unlock_irqrestore(&glue->lock, flags);
+				dev_info(glue->dev,
+					"ignore host disconnect detected from ID GPIO.\n");
+				return 0;
+			}
 		}
 
 		glue->vbus_active = 0;
@@ -828,19 +714,27 @@ static int musb_sprd_audio_notifier(struct notifier_block *nb,
 	dev_dbg(glue->dev, "[%s]event(%ld)\n", __func__, event);
 
 	if (event) {
+		__pm_stay_awake(glue->wake_lock);
 		spin_lock_irqsave(&glue->lock, flags);
 		if (glue->vbus_active == 1 || glue->dr_mode == USB_DR_MODE_PERIPHERAL) {
 			spin_unlock_irqrestore(&glue->lock, flags);
 			dev_info(glue->dev, "ignore host connection detected from audio.\n");
 			return 0;
 		}
-
+		if (glue->usb31pllv_frc_on.regmap_ptr) {
+			regmap_update_bits(glue->usb31pllv_frc_on.regmap_ptr,
+					   glue->usb31pllv_frc_on.args[0],
+					   glue->usb31pllv_frc_on.args[1],
+					   glue->usb31pllv_frc_on.args[1]);
+		}
 		glue->vbus_active = 1;
 		glue->wq_mode = USB_DR_MODE_HOST;
 		queue_work(system_unbound_wq, &glue->work);
 		spin_unlock_irqrestore(&glue->lock, flags);
 		dev_info(glue->dev,
 			"host connection detected from audio.\n");
+		msleep(5000);
+		__pm_relax(glue->wake_lock);
 	} else {
 		spin_lock_irqsave(&glue->lock, flags);
 		if (glue->vbus_active == 0 || glue->dr_mode == USB_DR_MODE_PERIPHERAL) {
@@ -849,6 +743,12 @@ static int musb_sprd_audio_notifier(struct notifier_block *nb,
 			return 0;
 		}
 
+		if (glue->usb31pllv_frc_on.regmap_ptr) {
+			regmap_update_bits(glue->usb31pllv_frc_on.regmap_ptr,
+					   glue->usb31pllv_frc_on.args[0],
+					   glue->usb31pllv_frc_on.args[1],
+					   ~glue->usb31pllv_frc_on.args[1]);
+		}
 		glue->vbus_active = 0;
 		glue->wq_mode = USB_DR_MODE_HOST;
 		queue_work(system_unbound_wq, &glue->work);
@@ -864,17 +764,6 @@ static void musb_sprd_detect_cable(struct sprd_glue *glue)
 {
 	unsigned long flags;
 	struct extcon_dev *id_ext = glue->id_edev ? glue->id_edev : glue->edev;
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-	struct usb_phy *usb_phy = glue->xceiv;
-	enum usb_charger_type type = usb_phy->charger_detect(usb_phy);
-
-	pr_err("%s, extcon_usb_host = %d\n", __func__, extcon_get_state(id_ext, EXTCON_USB_HOST));
-	pr_err("%s, extcon_usb_device = %d\n", __func__, extcon_get_state(glue->edev, EXTCON_USB));
-	pr_err("%s, usb_det = %d, kb_id = %d\n",
-		__func__, gpiod_get_value_cansleep(usb_det_desc), gpiod_get_value_cansleep(key_id_desc));
-	pr_err("%s, charge type: %d\n", __func__, type);
-	pr_err("%s, is_docking_online: %d\n", __func__, glue->is_docking_online);
-#endif
 
 	spin_lock_irqsave(&glue->lock, flags);
 	if (extcon_get_state(id_ext, EXTCON_USB_HOST) == true) {
@@ -884,9 +773,7 @@ static void musb_sprd_detect_cable(struct sprd_glue *glue)
 				"ignore device connection detected from ID GPIO.\n");
 			return;
 		}
-	#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-		otg_mode = 1;
-	#endif
+
 		glue->vbus_active = 1;
 		glue->wq_mode = USB_DR_MODE_HOST;
 		queue_work(system_unbound_wq, &glue->work);
@@ -898,12 +785,6 @@ static void musb_sprd_detect_cable(struct sprd_glue *glue)
 			return;
 		}
 
-	#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-		//glue->vbus_active = 1;
-		//glue->wq_mode = USB_DR_MODE_PERIPHERAL;
-		//queue_work(system_unbound_wq, &glue->work);
-		usb_plug_inout = 1;
-	#endif
 		glue->vbus_active = 1;
 		glue->wq_mode = USB_DR_MODE_PERIPHERAL;
 		queue_work(system_unbound_wq, &glue->work);
@@ -920,7 +801,8 @@ musb_sprd_retry_charger_detect(struct sprd_glue *glue)
 	unsigned long flags;
 	u8 pwr;
 
-	dev_dbg(glue->dev, "%s enter\n", __func__);
+	dev_info(glue->dev, "sprd: %s enter\n", __func__);
+
 	spin_lock_irqsave(&glue->lock, flags);
 	glue->retry_charger_detect = true;
 	spin_unlock_irqrestore(&glue->lock, flags);
@@ -957,27 +839,26 @@ static bool musb_sprd_is_connect_host(struct sprd_glue *glue)
 {
 	struct usb_phy *usb_phy = glue->xceiv;
 	enum usb_charger_type type = usb_phy->charger_detect(usb_phy);
-	#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-	int usb_det_value = gpiod_get_value_cansleep(usb_det_desc);
-	#endif
+	struct musb *musb = platform_get_drvdata(glue->musb);
+
 
 	dev_dbg(glue->dev, "%s type = %d\n", __func__, (int)type);
-	if ((type == UNKNOWN_TYPE) && (usb_phy->flags & CHARGER_2NDDETECT_ENABLE)) {
-		if (extcon_get_state(glue->edev, EXTCON_USB))
-			type = musb_sprd_retry_charger_detect(glue);
+	if ((type == UNKNOWN_TYPE || type == NON_DCP_TYPE) && (usb_phy->flags & CHARGER_2NDDETECT_ENABLE)) {
+		if (extcon_get_state(glue->edev, EXTCON_USB)) {
+			if (glue->use_pdhub_c2c) {
+				pm_runtime_disable(musb->controller);
+				type = musb_sprd_retry_charger_detect(glue);
+				pm_runtime_enable(musb->controller);
+				pm_runtime_mark_last_busy(musb->controller);
+			} else {
+				type = musb_sprd_retry_charger_detect(glue);
+			}
+		}
 	}
-	#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
 
 	if (type == SDP_TYPE || type == CDP_TYPE)
 		return true;
 
-    /* to solve the issue that dc plug in first, then plug in usb, usb cannot realize the type, so usb initilization cannot be finish */
-	if (usb_det_value == 1)
-        return true;
-	#else
-	if (type == SDP_TYPE || type == CDP_TYPE)
-		return true;
-	#endif
 	return false;
 }
 
@@ -1002,149 +883,19 @@ static void musb_sprd_charger_mode(void)
 		boot_charging = 0;
 }
 
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-struct platform_device *find_sprd_musb_dev(struct device *dev)
+static bool sprd_musb_get_dpdm_from_usb(struct sprd_glue *glue)
 {
-	struct device_node *musb_node = NULL;
-	struct platform_device *pdev;
+	struct usb_phy *usb_phy = glue->xceiv;
+	struct sprd_common_hsphy *common_phy = container_of(usb_phy,
+				 struct sprd_common_hsphy, phy);
+	bool res = false;
 
-	dev_err(dev, "find_sprd_musb_dev in\n");
-#if defined(PRJ_FEATURE_H_BOARD_SOC_PIKE2)
-	musb_node = of_find_compatible_node(NULL, NULL, "sprd,pike2-musb");
-#elif defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL3)
-	musb_node = of_find_compatible_node(NULL, NULL, "sprd,sharkl3-musb");
-#elif defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL5) || defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL5PRO)
-	musb_node = of_find_compatible_node(NULL, NULL, "sprd,sharkl5-musb");
-#elif defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL5PRO)
-	musb_node = of_find_compatible_node(NULL, NULL, "sprd,sharkl5pro-musb");
-#elif defined(PRJ_FEATURE_H_BOARD_SOC_QOGIRL6)
-	musb_node = of_find_compatible_node(NULL, NULL, "sprd,qogirl6-musb");
-#elif defined(PRJ_FEATURE_H_BOARD_SOC_SHARKLE)
-	musb_node = of_find_compatible_node(NULL, NULL, "sprd,sharkle-musb");
-#endif
-	if (!musb_node) {
-		dev_err(dev, "unable to get musb_sprd node\n");
-		return NULL;
-	}
-	pdev = of_find_device_by_node(musb_node);
-	if (!pdev) {
-		of_node_put(musb_node);
-		dev_err(dev, "unable to get musb_sprd device\n");
-		return NULL;
-	}
-	if(pdev) dev_err(dev, "find_sprd_musb_dev 0x%x\n", pdev);
+	if (common_phy->ops.get_dpdm_from_phy)
+		res = common_phy->ops.get_dpdm_from_phy(usb_phy);
 
-	of_node_put(musb_node);
-	return pdev;
+	return res;
 }
-EXPORT_SYMBOL_GPL(find_sprd_musb_dev);
 
-static void revo_docking_boot_work(struct work_struct *work)
-{
-	struct sprd_glue *glue = container_of(work, struct sprd_glue, docking_boot_work.work);
-	musb_sprd_detect_cable(glue);
-	msleep(1000);
-	musb_sprd_detect_kb_id(glue);
-}
-static void revo_docking_id_work(struct work_struct *work)
-{
-	struct sprd_glue *glue = container_of(work, struct sprd_glue, docking_id_work.work);
-	unsigned int id_value;
-	pr_err("*********** revo_docking_id_work happen **********\n");
-
-	id_value = gpiod_get_value_cansleep(key_id_desc);
-	// pr_err("%s, id_value = %d, usb_plug_inout = %d, usb_other_plug_inout = %d\n", __func__, id_value, usb_plug_inout, usb_other_plug_inout       );
-	pr_err("%s, id_value = %d, usb_plug_inout = %d\n", __func__, id_value, usb_plug_inout);
-	pr_err("%s, is_docking_online = %d, otg_mode = %d\n", __func__, glue->is_docking_online, otg_mode);
-
-	if (id_value) {//键盘不在位
-		if (usb_plug_inout == 1) {//插着usb充电开机/开机以后插usb充电, 再拔掉键盘
-			glue->is_docking_online = 0; //kb shutdown
-
-			glue->vbus_active = 0;
-			glue->wq_mode = USB_DR_MODE_HOST;
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 1);
-			switch_dpdm_to_usbphy(glue->pmic, 1);
-			dp_dm_dock_vcc_switchto_keyboard(0);
-			msleep(400);
-
-			glue->vbus_active = 1;                                  //usb device resumed
-			glue->wq_mode = USB_DR_MODE_PERIPHERAL;
-			queue_work(system_unbound_wq, &glue->work);
-		} else if (otg_mode == 1) {
-			glue->vbus_active = 0;                  //keyboard shutdown
-			glue->wq_mode = USB_DR_MODE_HOST;
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 1);
-			switch_dpdm_to_usbphy(glue->pmic, 1);
-			dp_dm_dock_vcc_switchto_keyboard(0);
-			msleep(400);
-
-			glue->is_docking_online = 0;
-			glue->vbus_active = 1;                  //otg resumed
-			glue->wq_mode = USB_DR_MODE_HOST;
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 0);
-			switch_dpdm_to_usbphy(glue->pmic, 0);
-
-		} else {                                                        //only plug out keyboard after sysboot
-			glue->is_docking_online = 0;
-
-			glue->vbus_active = 0;
-			glue->wq_mode = USB_DR_MODE_HOST;
-			dp_dm_dock_vcc_switchto_keyboard(0);
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 1);
-			switch_dpdm_to_usbphy(glue->pmic, 0);
-		}
-	} else {
-		if (usb_plug_inout == 1) { //插着usb充电开机/开机以后插usb充电, 再插入键盘
-
-			glue->vbus_active = 0;                  //usb device shutdown
-			glue->wq_mode = USB_DR_MODE_PERIPHERAL;
-			queue_work(system_unbound_wq, &glue->work);
-
-			msleep(400);
-
-			glue->is_docking_online = 1;                 //kb resumed
-			glue->vbus_active = 1;
-			glue->wq_mode = USB_DR_MODE_HOST;
-			dp_dm_dock_vcc_switchto_keyboard(1);
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 0);
-			switch_dpdm_to_usbphy(glue->pmic, 0);
-		} else if (otg_mode == 1) {
-
-			glue->vbus_active = 0;                  //otg shutdown
-			glue->wq_mode = USB_DR_MODE_HOST;
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 1);
-			switch_dpdm_to_usbphy(glue->pmic, 1);
-
-			msleep(400);
-
-			glue->is_docking_online = 1;                 //keyboard resume
-			glue->vbus_active = 1;
-			glue->wq_mode = USB_DR_MODE_HOST;
-			dp_dm_dock_vcc_switchto_keyboard(1);
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 0);
-			switch_dpdm_to_usbphy(glue->pmic, 0);
-		} else {                                                        //only plug in keyboard after sysboot
-			glue->is_docking_online = 1;
-
-			glue->vbus_active = 1;
-			glue->wq_mode = USB_DR_MODE_HOST;
-			dp_dm_dock_vcc_switchto_keyboard(1);
-			queue_work(system_unbound_wq, &glue->work);
-			//sc27xx_bc1p2_enable(glue->pmic, 0);
-			switch_dpdm_to_usbphy(glue->pmic, 0);
-		}
-	}
-	enable_irq(glue->key_id_irq);
-}
-#endif
 static void sprd_musb_recover_work(struct work_struct *work)
 {
 	struct sprd_glue *glue = container_of(work,
@@ -1187,6 +938,7 @@ static void sprd_musb_work(struct work_struct *work)
 	int ret;
 	int cnt = 100;
 
+	dev_info(glue->dev, "%s enter!\n", __func__);
 	spin_lock_irqsave(&glue->lock, flags);
 	current_mode = glue->wq_mode;
 	current_state = (glue->vbus_active && glue->usb_data_enabled);
@@ -1220,6 +972,8 @@ static void sprd_musb_work(struct work_struct *work)
 	dev_dbg(musb->controller, "%s enter: vbus = %d mode = %d\n",
 			__func__, current_state, current_mode);
 
+	dev_info(glue->dev, "sprd: %s, current_state=%d, current_mode=%d\n",
+			__func__, current_state, current_mode);
 	disable_irq_nosync(glue->vbus_irq);
 	if (current_state) {
 		if ((musb->g.state != USB_STATE_NOTATTACHED) &&
@@ -1239,15 +993,29 @@ static void sprd_musb_work(struct work_struct *work)
 		 * If the charger type is not SDP or CDP type, it does
 		 * not need to resume the device, just charging.
 		 */
-		if ((glue->dr_mode == USB_DR_MODE_PERIPHERAL &&
-			!musb_sprd_is_connect_host(glue)) || boot_charging) {
-			spin_lock_irqsave(&glue->lock, flags);
-			glue->charging_mode = true;
-			spin_unlock_irqrestore(&glue->lock, flags);
+		if (glue->use_pdhub_c2c) {
+			if ((glue->dr_mode == USB_DR_MODE_PERIPHERAL &&
+				!sprd_musb_get_dpdm_from_usb(glue) &&
+				!musb_sprd_is_connect_host(glue)) || boot_charging) {
+				spin_lock_irqsave(&glue->lock, flags);
+				glue->charging_mode = true;
+				spin_unlock_irqrestore(&glue->lock, flags);
 
-			dev_info(glue->dev,
-			 "Don't need resume musb device in charging mode!\n");
-			goto end;
+				dev_info(glue->dev,
+				 "Don't need resume musb device in charging mode!\n");
+				goto end;
+			}
+		} else {
+			if ((glue->dr_mode == USB_DR_MODE_PERIPHERAL &&
+				!musb_sprd_is_connect_host(glue)) || boot_charging) {
+				spin_lock_irqsave(&glue->lock, flags);
+				glue->charging_mode = true;
+				spin_unlock_irqrestore(&glue->lock, flags);
+
+				dev_info(glue->dev,
+				 "Don't need resume musb device in charging mode!\n");
+				goto end;
+			}
 		}
 		/* For charging mode, we don't set usb state to USB_STATE_ATTACHED
 		 * to ignore unnecessary interaction
@@ -1257,6 +1025,10 @@ static void sprd_musb_work(struct work_struct *work)
 
 		sprd_musb_reset_context(musb);
 
+		if (glue->use_pdhub_c2c)
+			call_sprd_usbphy_event_notifiers(SPRD_USBPHY_EVENT_TYPEC,
+				true, NULL);
+
 		cnt = 100;
 		while (!pm_runtime_suspended(musb->controller)
 			&& (--cnt > 0))
@@ -1264,8 +1036,6 @@ static void sprd_musb_work(struct work_struct *work)
 
 		if (cnt <= 0) {
 			glue->dr_mode = USB_DR_MODE_UNKNOWN;
-			// sprd PATCH20004710
-			// glue->vbus = NULL;
 			dev_err(musb->controller,
 				"Wait for musb controller enter suspend failed!\n");
 			goto end;
@@ -1297,29 +1067,18 @@ static void sprd_musb_work(struct work_struct *work)
 					goto end;
 				}
 			}
-			#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-			pr_err("%s, regulator enable, otg_mode = %d, glue->is_docking_online = %d, usb_plug_inout = %d\n",
-				__func__, otg_mode, glue->is_docking_online, usb_plug_inout);
-			if (glue->is_docking_online == 0 && usb_plug_inout == 0) { //typec otg
-				ret = regulator_enable(glue->vbus);
-				if (ret) {
-					dev_err(glue->dev,
-						"Failed to enable vbus: %d\n", ret);
-					goto end;
-				} else {
-					//sc27xx_bc1p2_enable(glue->pmic, 0);
-					switch_dpdm_to_usbphy(glue->pmic, 0);
-					pr_err("%s, enable otg 5v\n", __func__);
-                }
+
+			if (!glue->use_pdhub_c2c) {
+				if (!regulator_is_enabled(glue->vbus)) {
+					ret = regulator_enable(glue->vbus);
+					if (ret) {
+						dev_err(glue->dev,
+						 "Failed to enable vbus: %d\n",
+						 ret);
+						goto end;
+					}
+				}
 			}
-			#else
-			ret = regulator_enable(glue->vbus);
-			if (ret) {
-				dev_err(glue->dev,
-					"Failed to enable vbus: %d\n", ret);
-				goto end;
-			}
-			#endif
 		}
 
 		ret = pm_runtime_get_sync(musb->controller);
@@ -1359,9 +1118,6 @@ static void sprd_musb_work(struct work_struct *work)
 		charging_only = glue->charging_mode;
 		spin_unlock_irqrestore(&glue->lock, flags);
 		usb_gadget_set_state(&musb->g, USB_STATE_NOTATTACHED);
-		#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-		pr_err("%s, charging_only = %d, usb_is_suspend = %d\n", __func__, charging_only, pm_runtime_suspended(glue->dev));
-		#endif
 		if (charging_only || pm_runtime_suspended(musb->controller)) {
 			glue->dr_mode = USB_DR_MODE_UNKNOWN;
 			dev_info(glue->dev,
@@ -1381,32 +1137,19 @@ static void sprd_musb_work(struct work_struct *work)
 			while (musb->shutdowning && cnt-- > 0)
 				msleep(50);
 		}
-		#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-		pr_err("%s, regulator enable, otg_mode = %d, glue->is_docking_online = %d, usb_plug_inout = %d\n",
-			__func__, otg_mode, glue->is_docking_online, usb_plug_inout);
-		#endif
-		if (glue->dr_mode == USB_DR_MODE_HOST && glue->vbus) {
-		#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-			if (regulator_is_enabled(glue->vbus)) {
-				ret = regulator_disable(glue->vbus);
-				if (ret) {
-					dev_err(glue->dev,
-						"Failed to disable vbus: %d\n", ret);
-					goto end;
-				} else {
-					//sc27xx_bc1p2_enable(glue->pmic, 1);
-					switch_dpdm_to_usbphy(glue->pmic, 1);
-					pr_err("%s, disable otg 5v\n", __func__);
-                }
+
+		if (!glue->use_pdhub_c2c) {
+			if (glue->dr_mode == USB_DR_MODE_HOST && glue->vbus) {
+				if (regulator_is_enabled(glue->vbus)) {
+					ret = regulator_disable(glue->vbus);
+					if (ret) {
+						dev_err(glue->dev,
+						 "Failed to disable vbus: %d\n",
+							ret);
+						goto end;
+					}
+				}
 			}
-		#else
-			ret = regulator_disable(glue->vbus);
-			if (ret) {
-				dev_err(glue->dev,
-					"Failed to disable vbus: %d\n", ret);
-				goto end;
-			}
-		#endif
 		}
 
 		musb->shutdowning = 0;
@@ -1443,6 +1186,52 @@ end:
 	__pm_relax(glue->pd_wake_lock);
 	enable_irq(glue->vbus_irq);
 }
+#ifdef ZTE_FEATURE_PV_AR
+/**
+ * Store the usb status attribure when vbus on
+ */
+static ssize_t usb_control_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	struct sprd_glue *glue = dev_get_drvdata(dev);
+	struct musb *musb;
+
+	musb = platform_get_drvdata(glue->musb);
+	if (!musb)
+		return -EINVAL;
+
+	if (strncmp(buf, "connect", 10) == 0) {
+		if (!musb->shutdowning)
+			usb_phy_init(glue->xceiv);
+	} else if (strncmp(buf, "disconnect", 7) == 0) {
+		if (!musb->shutdowning) {
+			usb_phy_shutdown(glue->xceiv);
+			__pm_relax(glue->pd_wake_lock);
+		}
+	}
+
+	return size;
+}
+
+DEVICE_ATTR_WO(usb_control);
+
+struct device *lpm_dev;
+
+int musb_lpm_usb_disconnect(void)
+{
+	struct sprd_glue *glue = dev_get_drvdata(lpm_dev);
+	struct musb *musb = platform_get_drvdata(glue->musb);
+
+	if (!musb->shutdowning) {
+		usb_phy_shutdown(glue->xceiv);
+		__pm_relax(glue->pd_wake_lock);
+		__pm_relax(glue->wake_lock);
+	}
+	return 0;
+}
+EXPORT_SYMBOL(musb_lpm_usb_disconnect);
+#endif
 
 /**
  * Show / Store the hostenable attribure.
@@ -1544,6 +1333,9 @@ static struct attribute *musb_sprd_attrs[] = {
 	&dev_attr_maximum_speed.attr,
 	&dev_attr_current_speed.attr,
 	&dev_attr_musb_hostenable.attr,
+	#ifdef ZTE_FEATURE_PV_AR
+	&dev_attr_usb_control.attr,
+	#endif
 	NULL
 };
 ATTRIBUTE_GROUPS(musb_sprd);
@@ -1678,12 +1470,7 @@ static int musb_sprd_probe(struct platform_device *pdev)
 	u32 buf[2];
 	int ret;
 	u32 usb_data_enable = 0;
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-	int key_id_irq;
-	//int usb_det_irq;
-	struct device_node *regmap_np;
-	struct platform_device *regmap_pdev;
-#endif
+
 	if (sprd_usbmux_check_mode() == MUX_MODE) {
 		dev_info(&pdev->dev, "musb driver stop probe since usb mux jtag\n");
 		return -ENODEV;
@@ -1744,28 +1531,6 @@ static int musb_sprd_probe(struct platform_device *pdev)
 		glue->usb_pub_slp_poll_offset = buf[0];
 		glue->usb_pub_slp_poll_mask = buf[1];
 	}
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-	pr_err("%s:%d\n", __func__, __LINE__);
-	regmap_np = of_find_compatible_node(NULL, NULL, "sprd,sc27xx-syscon");
-	if (!regmap_np) {
-			dev_err(dev, "unable to get syscon node\n");
-			return -ENODEV;
-	}
-
-	regmap_pdev = of_find_device_by_node(regmap_np);
-	if (!regmap_pdev) {
-			of_node_put(regmap_np);
-			dev_err(dev, "unable to get syscon platform device\n");
-			return -ENODEV;
-	}
-
-	glue->pmic = dev_get_regmap(regmap_pdev->dev.parent, NULL);
-	if (!glue->pmic) {
-			dev_err(dev, "unable to get pmic regmap device\n");
-			return -ENODEV;
-	}
-	pr_err("%s:%d\n", __func__, __LINE__);
-#endif
 
 	glue->usb31pllv_frc_on.regmap_ptr = syscon_regmap_lookup_by_phandle_args(dev->of_node,
 						"usb31pllv_frc_on", 2, glue->usb31pllv_frc_on.args);
@@ -1777,10 +1542,7 @@ static int musb_sprd_probe(struct platform_device *pdev)
 	spin_lock_init(&glue->lock);
 	INIT_WORK(&glue->work, sprd_musb_work);
 	INIT_DELAYED_WORK(&glue->recover_work, sprd_musb_recover_work);
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-	INIT_DELAYED_WORK(&glue->docking_boot_work, revo_docking_boot_work);
-	INIT_DELAYED_WORK(&glue->docking_id_work, revo_docking_id_work);
-#endif
+
 	platform_set_drvdata(pdev, glue);
 
 	pdata.platform_ops = &sprd_musb_ops;
@@ -1793,6 +1555,7 @@ static int musb_sprd_probe(struct platform_device *pdev)
 		glue->use_singlefifo = false;
 	}
 	glue->power_always_on = of_property_read_bool(node, "wakeup-source");
+	glue->use_pdhub_c2c = of_property_read_bool(node, "use_pdhub_c2c");
 	pdata.board_data = &glue->power_always_on;
 	glue->is_suspend = false;
 	memset(&pinfo, 0, sizeof(pinfo));
@@ -1886,7 +1649,9 @@ static int musb_sprd_probe(struct platform_device *pdev)
 	wakeup_source_add(glue->wake_lock);
 	glue->pd_wake_lock = wakeup_source_create("musb-sprd-pd");
 	wakeup_source_add(glue->pd_wake_lock);
-
+#ifdef ZTE_FEATURE_PV_AR
+	lpm_dev = dev;
+#endif
 	if (of_device_is_compatible(node, "sprd,sharkl5pro-musb")) {
 		struct musb *musb = platform_get_drvdata(glue->musb);
 
@@ -1900,59 +1665,9 @@ static int musb_sprd_probe(struct platform_device *pdev)
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
 	musb_sprd_charger_mode();
-
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-/*注册中断这部分根据需要添加*/
-	key_id_desc = devm_gpiod_get_optional(&pdev->dev, "usb_dev_id", GPIOD_IN);
-	//key_id_desc = devm_gpiod_get_index(&pdev->dev, "usb_dev_id", 0, GPIOD_IN);
-	if (key_id_desc) {
-			key_id_irq = gpiod_to_irq(key_id_desc);
-			if (key_id_irq < 0) {
-					dev_err(dev, "failed to get USB DEV ID IRQ\n");
-					return key_id_irq;
-			}
-			glue->key_id_irq = key_id_irq;
-
-			ret = devm_request_threaded_irq(dev, key_id_irq, NULL,
-											usb_kb_id_irq_handler,
-											IRQF_TRIGGER_RISING |
-											IRQF_TRIGGER_FALLING |
-											IRQF_ONESHOT,
-											"usb_kb_id", glue);
-			if (ret < 0) {
-					dev_err(dev, "failed to request handler for USB DEV ID IRQ\n");
-					return ret;
-			}
-	}
-
-	ret = gpiod_set_debounce(key_id_desc, 350 * 1000);//set db time for removing kb irq tremble
-	if (ret < 0)
-			pr_err("%s, set kb id irq debounce time failed.\n", __func__);
-
-	docking_vcc = of_get_named_gpio(node, "docking-vcc-gpio", 0);
-	if (gpio_is_valid(docking_vcc)) {
-		ret = devm_gpio_request(&pdev->dev,docking_vcc,"docking-vcc-en");
-		if (ret)
-				pr_info("docking_vcc gpio requst err\n");
-		else
-				pr_info("docking_vcc gpio requst %d\n",docking_vcc);
-	}
-	hub_sw = of_get_named_gpio(node, "hub_sw-gpio", 0);
-	if (gpio_is_valid(hub_sw)) {
-		ret = devm_gpio_request(&pdev->dev,hub_sw,"docking-vcc-en");
-		if (ret)
-				pr_info("hub_sw gpio requst err\n");
-		else
-				pr_info("hub_sw gpio requst %d\n",hub_sw);
-	}
-#endif
 	if (!is_slave)
 		musb_sprd_detect_cable(glue);
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-	msleep(1500);
-	musb_sprd_detect_kb_id(glue);
-	//schedule_delayed_work(&glue->docking_boot_work, msecs_to_jiffies(30000));
-#endif
+
 	return 0;
 
 err_extcon_vbus:
@@ -2082,6 +1797,7 @@ static int musb_sprd_suspend(struct device *dev)
 	u32 msk, val;
 	int ret;
 
+	dev_info(glue->dev, "%s: enter\n", __func__);
 	if (musb->is_offload && !musb->offload_used) {
 		if (glue->vbus) {
 			ret = regulator_disable(glue->vbus);
@@ -2121,6 +1837,7 @@ static int musb_sprd_resume(struct device *dev)
 	u32 msk;
 	int ret;
 
+	dev_info(glue->dev, "%s: enter\n", __func__);
 	if (musb->is_offload && !musb->offload_used) {
 		if (glue->vbus) {
 			ret = regulator_enable(glue->vbus);
@@ -2180,9 +1897,7 @@ static int musb_sprd_runtime_resume(struct device *dev)
 
 	clk_prepare_enable(glue->clk);
 	glue->suspending = false;
-#ifdef PRJ_FEATURE_H_BOARD_DOCKING_SUPPORT
-	pr_err("%s, musb->shutdowning = %d, glue->dr_mode = %d\n", __func__, musb->shutdowning, glue->dr_mode);
-#endif
+
 	if (!musb->shutdowning)
 		usb_phy_init(glue->xceiv);
 	if (glue->dr_mode == USB_DR_MODE_HOST) {

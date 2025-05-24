@@ -30,7 +30,6 @@
 #include <dt-bindings/input/gpio-keys.h>
 #include <linux/of_platform.h>
 #include <linux/pinctrl/consumer.h>
-#include "prj/prj_config.h"
 
 struct gpio_button_data {
 	const struct gpio_keys_button *button;
@@ -819,92 +818,6 @@ static int gpio_keys_probe(struct platform_device *pdev)
 		if (IS_ERR(pdata))
 			return PTR_ERR(pdata);
 	}
-
-#if defined(PRJ_FEATURE_H_BOARD_SOC_SHARKL3)
-	sprd_pin_set(pdev);
-#endif
-	ddata = devm_kzalloc(dev, struct_size(ddata, data, pdata->nbuttons),
-			     GFP_KERNEL);
-	if (!ddata) {
-		dev_err(dev, "failed to allocate state\n");
-		return -ENOMEM;
-	}
-
-	ddata->keymap = devm_kcalloc(dev,
-				     pdata->nbuttons, sizeof(ddata->keymap[0]),
-				     GFP_KERNEL);
-	if (!ddata->keymap)
-		return -ENOMEM;
-
-	input = devm_input_allocate_device(dev);
-	if (!input) {
-		dev_err(dev, "failed to allocate input device\n");
-		return -ENOMEM;
-	}
-
-	ddata->pdata = pdata;
-	ddata->input = input;
-	mutex_init(&ddata->disable_lock);
-
-	platform_set_drvdata(pdev, ddata);
-	input_set_drvdata(input, ddata);
-
-	input->name = pdata->name ? : pdev->name;
-	input->phys = "gpio-keys/input0";
-	input->dev.parent = dev;
-	input->open = gpio_keys_open;
-	input->close = gpio_keys_close;
-
-	input->id.bustype = BUS_HOST;
-	input->id.vendor = 0x0001;
-	input->id.product = 0x0001;
-	input->id.version = 0x0100;
-
-	input->keycode = ddata->keymap;
-	input->keycodesize = sizeof(ddata->keymap[0]);
-	input->keycodemax = pdata->nbuttons;
-
-	/* Enable auto repeat feature of Linux input subsystem */
-	if (pdata->rep)
-		__set_bit(EV_REP, input->evbit);
-
-	for (i = 0; i < pdata->nbuttons; i++) {
-		const struct gpio_keys_button *button = &pdata->buttons[i];
-
-		if (!dev_get_platdata(dev)) {
-			child = device_get_next_child_node(dev, child);
-			if (!child) {
-				dev_err(dev,
-					"missing child device node for entry %d\n",
-					i);
-				return -EINVAL;
-			}
-		}
-
-		error = gpio_keys_setup_key(pdev, input, ddata,
-					    button, i, child);
-		if (error) {
-			fwnode_handle_put(child);
-			return error;
-		}
-
-		if (button->wakeup)
-			wakeup = 1;
-	}
-
-	fwnode_handle_put(child);
-
-	error = input_register_device(input);
-	if (error) {
-		dev_err(dev, "Unable to register input device, error: %d\n",
-			error);
-		return error;
-	}
-
-	device_init_wakeup(dev, wakeup);
-
-	return 0;
-}
 
 static int __maybe_unused
 gpio_keys_button_enable_wakeup(struct gpio_button_data *bdata)
